@@ -1,0 +1,7 @@
+# 基础（离线唤醒）依赖；语音对话（WAKE_DIALOGUE=1）额外需要 sherpa-onnx
+openwakeword==0.6.0
+onnxruntime>=1.16.0
+numpy>=1.24.0
+scipy>=1.10.0
+# 语音对话（本地 ASR）:
+sherpa-onnx>=1.10.0

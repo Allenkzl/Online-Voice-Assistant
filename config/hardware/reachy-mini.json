@@ -1,0 +1,16 @@
+{
+  "硬件": "Reachy Mini (USB声卡 + 共享dsnoop/dmix)",
+  "input_device": "reachymini_audio_src",
+  "output_device": "reachymini_audio_sink",
+  "channel": 0,
+  "wake_model_dir": "models",
+  "asr_model_dir": "models/asr_paraformer_zh_int8",
+  "asr_说明": "本地识别: 全尺寸 paraformer int8 (更准) / 小模型 asr_paraformer_zh_small (更快)",
+  "threshold": 0.2,
+  "hits": 3,
+  "cooldown": 3.0,
+  "dialogue": true,
+  "end_silence_s": 1.2,
+  "max_question_s": 15.0,
+  "listen_delay_s": 0.6
+}

@@ -1,0 +1,22 @@
+[Unit]
+Description=Online Voice Assistant - wake word listener
+After=sound.target network.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=__SERVICE_USER__
+WorkingDirectory=__INSTALL_DIR__
+Environment=PYTHONUNBUFFERED=1
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=OPENBLAS_NUM_THREADS=1
+Environment=OMP_NUM_THREADS=1
+EnvironmentFile=-/etc/ova.env
+ExecStart=__INSTALL_DIR__/.venv/bin/python -m ova wake --threshold 0.2 --hits 3
+Restart=on-failure
+RestartSec=3
+TimeoutStopSec=5
+KillMode=control-group
+
+[Install]
+WantedBy=multi-user.target

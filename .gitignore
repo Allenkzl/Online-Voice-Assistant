@@ -1,0 +1,11 @@
+.venv/
+__pycache__/
+*.pyc
+*.log
+models/*.onnx
+config.json
+models/asr_paraformer_zh_small/
+models/asr_paraformer_zh_int8/
+*.egg-info/
+build/
+dist/

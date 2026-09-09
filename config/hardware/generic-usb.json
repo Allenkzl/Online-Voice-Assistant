@@ -1,0 +1,17 @@
+{
+  "硬件": "普通 USB 麦克风/音箱 (Linux ALSA, 自动探测兜底 default→plughw:0,0)",
+  "input_device": "auto",
+  "output_device": "auto",
+  "channel": 0,
+  "wake_model_dir": "models",
+  "asr_model_dir": "models/asr_paraformer_zh_small",
+  "asr_说明": "新设备建议先用小模型跑通, 再按需换 int8 全尺寸",
+  "threshold": 0.2,
+  "hits": 3,
+  "cooldown": 3.0,
+  "dialogue": false,
+  "end_silence_s": 1.2,
+  "max_question_s": 15.0,
+  "listen_delay_s": 0.6,
+  "注意": "麦通道/音量不确定时先跑 tools/calibrate.py 与 console ② 卡片确认拾音质量"
+}

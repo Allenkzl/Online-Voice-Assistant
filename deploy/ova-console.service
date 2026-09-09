@@ -1,0 +1,19 @@
+[Unit]
+Description=Online Voice Assistant - debug console (web UI)
+After=network.target sound.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+User=__SERVICE_USER__
+WorkingDirectory=__INSTALL_DIR__
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/etc/ova.env
+Environment=CONSOLE_HOST=0.0.0.0
+Environment=CONSOLE_PORT=8080
+ExecStart=__INSTALL_DIR__/.venv/bin/python -m ova console
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
