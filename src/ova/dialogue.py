@@ -23,6 +23,7 @@ from ova.wake import capture_utterance, svc_event
 from ova.llm import SYSTEM_PROMPT, CloudError, chat_once
 from ova.tts import synthesize
 from ova.asr import LocalAsr
+from ova.solutions import match_solution_intro
 from ova.tools import WEATHER_TOOL, load_tool_calls, query_weather
 
 LOG = logging.getLogger("dialogue")
@@ -138,6 +139,22 @@ def run_dialogue_round(backend, root: Path, asr: LocalAsr, cfg: dict) -> None:
 
     LOG.info("USER_SAID text=%s", text)
     svc_event("asr", f"识别: {text}", "ok", text=text)
+    intro = match_solution_intro(text)
+    if intro is not None:
+        LOG.info("SOLUTION_INTRO id=%s file=%s", intro.id, intro.audio_path)
+        svc_event("dialog", f"播放{intro.name}讲解", "ok", text=intro.text[:120])
+        if not intro.audio_path.is_file():
+            LOG.error("solution intro audio missing: %s", intro.audio_path)
+            play_asset(backend, root, "fallback_question.wav")
+            return
+        try:
+            backend.play_file(intro.audio_path, timeout=180.0)
+        except Exception as exc:  # noqa: BLE001 - keep the wake service alive
+            LOG.error("solution intro playback failed: %s", exc)
+            play_asset(backend, root, "fallback_question.wav")
+            return
+        svc_event("dialog", f"{intro.name}讲解完成，回到待唤醒", "ok")
+        return
     # Perceived-latency buffer: answer verbally first, then think.
     play_asset(backend, root, "ack_think.wav")
     try:
