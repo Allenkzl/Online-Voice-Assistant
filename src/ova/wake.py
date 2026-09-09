@@ -272,13 +272,23 @@ def validate_wav(path: Path) -> None:
 
 
 def respond(backend: AlsaBackend, responses_dir: Path) -> Path:
+    """Play a random acknowledgement; a broken file must never kill the
+    listener, so invalid entries are skipped with a warning."""
     pool = responses(responses_dir)
-    path = random.choice(pool)
-    validate_wav(path)
-    LOG.info("RESPONSE_START text=%s file=%s", path.stem, path.name)
-    backend.play_file(path)
-    LOG.info("RESPONSE_DONE")
-    return path
+    import random as _rnd
+    order = list(pool)
+    _rnd.shuffle(order)
+    for path in order:
+        try:
+            validate_wav(path)
+        except (ValueError, wave.Error) as exc:
+            LOG.error("skip broken response %s: %s", path, exc)
+            continue
+        LOG.info("RESPONSE_START text=%s file=%s", path.stem, path.name)
+        backend.play_file(path)
+        LOG.info("RESPONSE_DONE")
+        return path
+    raise RuntimeError("no playable response wav under " + str(responses_dir))
 
 
 def score_frame(model: Model, samples: np.ndarray) -> float:
@@ -408,7 +418,7 @@ def main(argv=None) -> int:
     responses_dir = Path(cfg["responses_dir"])
 
     if args.play_response is not None:
-        path = args.play_response if str(args.play_response) else None
+        path = args.play_response if str(args.play_response) not in ("", ".") else None
         if path:
             validate_wav(path)
             backend.play_file(path)
@@ -478,9 +488,9 @@ def main(argv=None) -> int:
             if cfg.get("dialogue"):
                 try:
                     if asr is None:
-                        from asr_local import LocalAsr  # lazy: cloud stage
+                        from ova.asr import LocalAsr  # lazy: cloud stage
                         asr = LocalAsr(Path(cfg["asr_model_dir"]))
-                    from dialogue import run_dialogue_round
+                    from ova.dialogue import run_dialogue_round
                     run_dialogue_round(backend, responses_dir, asr, cfg)
                 except Exception as exc:  # never let one bad round kill service
                     LOG.error("DIALOGUE_ERROR %s: %s", type(exc).__name__, exc)
