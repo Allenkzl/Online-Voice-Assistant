@@ -27,11 +27,12 @@
 
 ```text
 barge_in = true
-barge_in_threshold = 0.45
+barge_in_threshold = 0.30
 barge_in_hits = 4
 barge_in_max_command_s = 6.0
 barge_in_listen_delay_s = 0.2
 barge_in_resume_rewind_s = 0.6
+barge_in_log_interval_s = 2.0
 ```
 
 普通待机唤醒仍使用：
@@ -58,9 +59,18 @@ hits = 4
 播放中打断成功时，主服务日志应出现：
 
 ```text
+BARGE_LISTENING_START threshold=0.30 hits=4
 PLAYBACK_INTERRUPTED name=... score=... elapsed=...
 BARGE_COMMAND text=...
 ```
+
+如果播放期间用户喊了 `Hey Jarvis` 但没有打断，主服务日志会每 2 秒记录一次：
+
+```text
+BARGE_LISTENING peak_score=... rms=... threshold=0.30 hits=.../4
+```
+
+这用于区分“麦克风没有采到用户声音”和“采到了但 wake 分数不足”。
 
 如果切换到新讲解，随后应出现：
 
@@ -87,5 +97,5 @@ BARGE_STOP text=...
 
 ## 已知限制
 
-- 当前依赖麦克风在机器人播报声中仍能听到用户的 `Hey Jarvis`。如果展厅音量太大，可能需要把 `barge_in_threshold` 降到 0.40，或增加麦克风/扬声器物理隔离。
+- 当前依赖麦克风在机器人播报声中仍能听到用户的 `Hey Jarvis`。2026-09-10 现场测试发现 `barge_in_threshold=0.45` 下智慧空间讲解期间 5 次唤醒均未打断，因此先降到与待机唤醒一致的 `0.30 / 4`，并加入 `BARGE_LISTENING` 峰值日志便于下一轮调优。如果误打断变多，可按日志峰值回调到 0.35。
 - `继续` 通过裁剪 WAV 从中断时间附近恢复，不是 sample-perfect 的播放器级暂停；当前会从中断点前约 0.6 秒继续，保证听感连贯。

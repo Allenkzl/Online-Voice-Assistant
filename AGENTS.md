@@ -43,7 +43,7 @@
 - 方案讲解音频路径由 `config/solutions.json` 管理，当前为 `smart_retail`、`smart_space`、`emergency_response` 三个主题，各有 `zh/en` 两套 WAV。
 - 当前正式中文触发词使用“智慧空间”，不把“智慧家居”作为别名触发。
 - 唤醒调优记录见 `docs/wake-tuning-2026-09-10.md`；再次调优时先复核历史 `WAKE_DETECTED` 分数、背景样本、唤醒样本，再决定是否改 `threshold`/`hits`。
-- 播放中打断记录见 `docs/barge-in-playback-2026-09-10.md`；打断检测使用独立参数，当前建议 `barge_in_threshold=0.45 / barge_in_hits=4`。
+- 播放中打断记录见 `docs/barge-in-playback-2026-09-10.md`；打断检测使用独立参数，当前建议 `barge_in_threshold=0.30 / barge_in_hits=4`，并用 `BARGE_LISTENING` 日志观察播放期间峰值。
 
 ## 变更日志
 
@@ -53,3 +53,4 @@
 | 2026-09-10 | `dev` | 基于现场日志与校准录音，将展厅唤醒参数调整为 `threshold=0.30 / hits=4`，降低误触发。 |
 | 2026-09-10 | `dev` | 将展厅讲解从“方案一/二/三”改为“智慧零售/智慧空间/应急救灾”三主题，并生成中英文预制音频。 |
 | 2026-09-10 | `dev` | 新增播放中 `Hey Jarvis` 打断：可停止、继续或切换到新的展厅讲解。 |
+| 2026-09-10 | `dev` | 将播放中打断阈值从 `0.45/4` 调低到 `0.30/4`，补充 `BARGE_LISTENING` 峰值日志用于现场调优。 |

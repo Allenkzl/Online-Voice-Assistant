@@ -28,8 +28,8 @@
   "max_question_s_说明": "问题录音上限秒数",
   "barge_in": true,
   "barge_in_说明": "播放长回答/展厅讲解时继续监听唤醒词，命中后中断播放并听下一句指令",
-  "barge_in_threshold": 0.45,
-  "barge_in_threshold_说明": "播放中打断用的唤醒分数阈值，建议高于普通唤醒以避免回声误打断",
+  "barge_in_threshold": 0.3,
+  "barge_in_threshold_说明": "播放中打断用的唤醒分数阈值；展厅讲解音频不含唤醒词时可与普通唤醒保持一致",
   "barge_in_hits": 4,
   "barge_in_hits_说明": "播放中打断需要连续几帧超过阈值",
   "barge_in_max_command_s": 6.0,
@@ -37,5 +37,7 @@
   "barge_in_listen_delay_s": 0.2,
   "barge_in_listen_delay_s_说明": "打断停止播放后，开始听新指令前等待回声消散的秒数",
   "barge_in_resume_rewind_s": 0.6,
-  "barge_in_resume_rewind_s_说明": "用户说继续时，从中断点往前回退几秒恢复播放"
+  "barge_in_resume_rewind_s_说明": "用户说继续时，从中断点往前回退几秒恢复播放",
+  "barge_in_log_interval_s": 2.0,
+  "barge_in_log_interval_s_说明": "播放中监听每隔几秒记录一次 peak_score/rms；设为0可关闭"
 }

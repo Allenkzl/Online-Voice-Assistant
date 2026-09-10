@@ -82,7 +82,7 @@
 | LLM | qwen-flash（enable_thinking=False），system 提示 ≤60字 | 天气必须走 query_weather 工具 |
 | TTS | qwen3-tts-flash / voice=Cherry，合成 1~4s | 24k→16k 线性重采样 |
 | 展厅讲解 | 三主题：智慧零售 / 智慧空间 / 应急救灾，中英文预制 WAV | 关键词路由见 `config/solutions.json`，音频位于 `assets/solutions/*_{zh,en}.wav` |
-| 播放中打断 | `barge_in_threshold=0.45 / barge_in_hits=4` | 长音频播放时监听 `Hey Jarvis`，打断后支持停止、继续、切换讲解 |
+| 播放中打断 | `barge_in_threshold=0.30 / barge_in_hits=4` | 长音频播放时监听 `Hey Jarvis`，打断后支持停止、继续、切换讲解；每 2s 记录 `BARGE_LISTENING peak_score/rms` 便于调优 |
 | 延迟 | 说完→开口 3~8s（含缓冲音后感知 ~1s） | CM4 实测 |
 | 事件桥 | `HJV_EVENT_FILE`=/tmp/ova_events.jsonl | 调试台时间线数据源 |
 

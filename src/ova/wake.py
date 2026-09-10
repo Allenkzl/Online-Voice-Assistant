@@ -83,11 +83,12 @@ DEFAULTS = {
     "max_question_s": 15.0,
     "listen_delay_s": 0.6,          # 应答播放后等回声消散再开始听
     "barge_in": True,               # 播放长音频时允许 Hey Jarvis 打断
-    "barge_in_threshold": 0.45,
+    "barge_in_threshold": 0.30,
     "barge_in_hits": 4,
     "barge_in_max_command_s": 6.0,
     "barge_in_listen_delay_s": 0.2,
     "barge_in_resume_rewind_s": 0.6,
+    "barge_in_log_interval_s": 2.0,
 
 }
 
@@ -111,6 +112,7 @@ ENV_MAP = {
     "barge_in_max_command_s": "WAKE_BARGE_IN_MAX_COMMAND_S",
     "barge_in_listen_delay_s": "WAKE_BARGE_IN_LISTEN_DELAY_S",
     "barge_in_resume_rewind_s": "WAKE_BARGE_IN_RESUME_REWIND_S",
+    "barge_in_log_interval_s": "WAKE_BARGE_IN_LOG_INTERVAL_S",
 }
 
 
@@ -124,7 +126,7 @@ def _to_type(name: str, value: str):
     if name in ("threshold", "cooldown", "end_silence_s", "max_question_s",
                  "listen_delay_s", "barge_in_threshold",
                  "barge_in_max_command_s", "barge_in_listen_delay_s",
-                 "barge_in_resume_rewind_s"):
+                 "barge_in_resume_rewind_s", "barge_in_log_interval_s"):
         return float(value)
     return value
 

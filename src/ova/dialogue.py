@@ -133,10 +133,15 @@ def _barge_monitor(backend, cfg: dict, stop_event: threading.Event,
                    interrupt_event: threading.Event, result: dict) -> None:
     try:
         model = _get_barge_model(str(cfg.get("model_dir", "models")))
-        threshold = float(cfg.get("barge_in_threshold", 0.45))
+        threshold = float(cfg.get("barge_in_threshold", 0.30))
         required_hits = int(cfg.get("barge_in_hits", 4))
+        log_interval = float(cfg.get("barge_in_log_interval_s", 2.0))
         channel = cfg.get("channel", 0)
         hits = 0
+        peak = 0.0
+        last_log = time.monotonic()
+        LOG.info("BARGE_LISTENING_START threshold=%.2f hits=%d",
+                 threshold, required_hits)
         with Capture(backend) as capture:
             warmup_end = time.monotonic() + 0.25
             while not stop_event.is_set():
@@ -144,10 +149,23 @@ def _barge_monitor(backend, cfg: dict, stop_event: threading.Event,
                 if time.monotonic() < warmup_end:
                     continue
                 score = score_frame(model, samples)
+                peak = max(peak, score)
                 if score >= threshold:
                     hits += 1
                 else:
                     hits = 0
+                now = time.monotonic()
+                if log_interval > 0 and now - last_log >= log_interval:
+                    rms = float(
+                        ((samples.astype("float32") / 32768.0) ** 2).mean()
+                    ) ** 0.5
+                    LOG.info(
+                        "BARGE_LISTENING peak_score=%.4f rms=%.5f "
+                        "threshold=%.2f hits=%d/%d",
+                        peak, rms, threshold, hits, required_hits,
+                    )
+                    peak = 0.0
+                    last_log = now
                 if hits >= required_hits:
                     result["score"] = score
                     interrupt_event.set()
