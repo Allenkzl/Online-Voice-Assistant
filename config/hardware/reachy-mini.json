@@ -12,5 +12,11 @@
   "dialogue": true,
   "end_silence_s": 1.2,
   "max_question_s": 15.0,
-  "listen_delay_s": 0.6
+  "listen_delay_s": 0.6,
+  "barge_in": true,
+  "barge_in_threshold": 0.45,
+  "barge_in_hits": 4,
+  "barge_in_max_command_s": 6.0,
+  "barge_in_listen_delay_s": 0.2,
+  "barge_in_resume_rewind_s": 0.6
 }

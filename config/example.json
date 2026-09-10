@@ -25,5 +25,17 @@
   "end_silence_s": 2.0,
   "end_silence_s_说明": "说完话后静音几秒判定结束",
   "max_question_s": 15.0,
-  "max_question_s_说明": "问题录音上限秒数"
+  "max_question_s_说明": "问题录音上限秒数",
+  "barge_in": true,
+  "barge_in_说明": "播放长回答/展厅讲解时继续监听唤醒词，命中后中断播放并听下一句指令",
+  "barge_in_threshold": 0.45,
+  "barge_in_threshold_说明": "播放中打断用的唤醒分数阈值，建议高于普通唤醒以避免回声误打断",
+  "barge_in_hits": 4,
+  "barge_in_hits_说明": "播放中打断需要连续几帧超过阈值",
+  "barge_in_max_command_s": 6.0,
+  "barge_in_max_command_s_说明": "打断后等待用户说新指令的最长秒数",
+  "barge_in_listen_delay_s": 0.2,
+  "barge_in_listen_delay_s_说明": "打断停止播放后，开始听新指令前等待回声消散的秒数",
+  "barge_in_resume_rewind_s": 0.6,
+  "barge_in_resume_rewind_s_说明": "用户说继续时，从中断点往前回退几秒恢复播放"
 }
