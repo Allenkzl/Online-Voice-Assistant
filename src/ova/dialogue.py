@@ -1,14 +1,17 @@
 #!/usr/bin/env python3
-"""Single-turn voice dialogue round: listen -> local ASR -> Qwen -> TTS.
+"""Single-turn voice dialogue round.
 
-Flow (called by wake_service right after the wake acknowledgement):
+The orchestrator owns everything except the "brain": it records the question,
+routes local commands (stop/continue/showroom intros), asks the configured
+:mod:`ova.engines` engine for a reply and plays it while listening for barge-in.
 
-    listen_question()           energy VAD, 2 s trailing silence or 15 s cap
-        -> empty text?         play fallback_listen, listen once more
-    asr (sherpa-onnx, local)
-    chat (Qwen online)         -> CloudError?  play fallback_net, abort
-    synthesize (qwen3-tts)     -> CloudError?  play fallback_net, abort
-    play reply
+    listen_question()               energy VAD, trailing silence or max cap
+        -> too quiet?               play fallback_listen, listen once more
+    engine.respond(samples, text)   pipeline: local ASR -> Qwen -> Qwen TTS
+                                    e2e:      audio -> speech model -> audio
+        -> EngineError?             play fallback_net, return to idle
+    play reply                      interrupts on "Hey Jarvis", then stop /
+                                    continue / next intro via local ASR
 """
 
 from __future__ import annotations
@@ -30,13 +33,11 @@ from ova.wake import (
     load_model,
     mono,
     score_frame,
-    svc_event,
 )
-from ova.llm import SYSTEM_PROMPT, CloudError, chat_once
-from ova.tts import synthesize
+from ova.config import svc_event
+from ova.engines import Engine, EngineError, Reply, build_engine
 from ova.asr import LocalAsr
 from ova.solutions import match_solution_intro
-from ova.tools import WEATHER_TOOL, load_tool_calls, query_weather
 
 LOG = logging.getLogger("dialogue")
 
@@ -63,6 +64,14 @@ class PlaybackResult:
     interrupted: bool
     elapsed_s: float = 0.0
     score: float = 0.0
+
+
+@dataclass
+class BargeCommand:
+    """A short utterance recorded right after an interrupt."""
+
+    samples: object = None
+    text: str = ""
 
 
 STOP_WORDS = ("停止", "停一下", "停下", "别说了", "不要说了", "先停", "stop", "cancel")
@@ -300,7 +309,8 @@ def listen_question(backend, channel=0, end_silence_s=1.2,
     return samples
 
 
-def listen_command_after_barge_in(backend, asr: LocalAsr, cfg: dict) -> str:
+def listen_command_after_barge_in(backend, asr: LocalAsr, cfg: dict) -> BargeCommand:
+    """Record the short follow-up command; keeps the audio for e2e engines."""
     samples = listen_question(
         backend,
         channel=cfg.get("channel", 0),
@@ -312,11 +322,11 @@ def listen_command_after_barge_in(backend, asr: LocalAsr, cfg: dict) -> str:
     if samples is None:
         LOG.info("BARGE_COMMAND_EMPTY")
         svc_event("dialog", "打断后未听到新指令，回到待唤醒", "warn")
-        return ""
-    text = asr.transcribe(samples)
+        return BargeCommand()
+    text = asr.transcribe(samples) if asr is not None else ""
     LOG.info("BARGE_COMMAND text=%s", text)
     svc_event("asr", f"打断后识别: {text}", "ok", text=text)
-    return text
+    return BargeCommand(samples=samples, text=text)
 
 
 def _cleanup_state(state: PlaybackState | None) -> None:
@@ -328,76 +338,95 @@ def _cleanup_state(state: PlaybackState | None) -> None:
         pass
 
 
+def _state_from_reply(engine: Engine, reply: Reply) -> PlaybackState:
+    """Wrap an engine reply so the shared playback loop can play it."""
+    LOG.info("REPLY_READY engine=%s file=%s text=%s",
+             engine.name, reply.audio_path, (reply.text or "")[:80])
+    svc_event("dialog", f"{engine.name} 回复就绪", "info",
+              **{k: v for k, v in reply.meta.items()
+                 if isinstance(v, (int, float, str))})
+    return PlaybackState(
+        path=reply.audio_path,
+        name="回答",
+        text=reply.text,
+        timeout_s=reply.timeout_s,
+        cleanup=reply.temporary,
+        done_msg="本轮对话完成，回到待唤醒",
+        done_lang=reply.lang,
+    )
+
+
 def _playback_from_text(
     backend,
     root: Path,
     asr: LocalAsr,
     cfg: dict,
     text: str,
+    samples=None,
     previous: PlaybackState | None = None,
+    engine: Engine | None = None,
 ) -> PlaybackState | None:
-    """Map recognized text to the next playback, or None to return idle."""
-    LOG.info("USER_SAID text=%s", text)
-    svc_event("asr", f"识别: {text}", "ok", text=text)
-    if _is_stop_command(text):
-        LOG.info("BARGE_STOP text=%s", text)
-        svc_event("dialog", "收到停止指令，回到待唤醒", "ok")
-        return None
+    """Route the turn and ask the engine for the next playback.
 
-    intro = match_solution_intro(text)
-    if intro is not None:
-        LOG.info("SOLUTION_INTRO id=%s lang=%s file=%s",
-                 intro.id, intro.language, intro.audio_path)
-        svc_event("dialog", f"播放{intro.name}讲解({intro.language})",
-                  "ok", text=intro.text[:120], lang=intro.language)
-        if not intro.audio_path.is_file():
-            LOG.error("solution intro audio missing: %s", intro.audio_path)
-            play_asset(backend, root, "fallback_question.wav")
+    ``text`` is the ASR transcript (may be "" for end-to-end engines) and
+    ``samples`` the matching 16 kHz mono audio. Returns None to go idle.
+    """
+    engine = engine if engine is not None else build_engine(cfg, asr=asr)
+
+    if engine.needs_transcript:
+        LOG.info("USER_SAID text=%s", text)
+        svc_event("asr", f"识别: {text}", "ok", text=text)
+        if _is_stop_command(text):
+            LOG.info("BARGE_STOP text=%s", text)
+            svc_event("dialog", "收到停止指令，回到待唤醒", "ok")
             return None
-        return PlaybackState(
-            path=intro.audio_path,
-            name=f"{intro.name}讲解",
-            text=intro.text,
-            timeout_s=180.0,
-            done_msg=f"{intro.name}讲解完成，回到待唤醒",
-            done_lang=intro.language,
-        )
 
-    if previous is not None and _is_continue_command(text):
-        LOG.info("BARGE_CONTINUE name=%s offset=%.2fs", previous.name, previous.offset_s)
-        svc_event("dialog", f"继续{previous.name}", "ok",
-                  elapsed=round(previous.offset_s, 2))
-        return previous
+        intro = match_solution_intro(text)
+        if intro is not None:
+            LOG.info("SOLUTION_INTRO id=%s lang=%s file=%s",
+                     intro.id, intro.language, intro.audio_path)
+            svc_event("dialog", f"播放{intro.name}讲解({intro.language})",
+                      "ok", text=intro.text[:120], lang=intro.language)
+            if not intro.audio_path.is_file():
+                LOG.error("solution intro audio missing: %s", intro.audio_path)
+                play_asset(backend, root, "fallback_question.wav")
+                return None
+            return PlaybackState(
+                path=intro.audio_path,
+                name=f"{intro.name}讲解",
+                text=intro.text,
+                timeout_s=180.0,
+                done_msg=f"{intro.name}讲解完成，回到待唤醒",
+                done_lang=intro.language,
+            )
 
-    play_asset(backend, root, "ack_think.wav")
+        if previous is not None and _is_continue_command(text):
+            LOG.info("BARGE_CONTINUE name=%s offset=%.2fs", previous.name, previous.offset_s)
+            svc_event("dialog", f"继续{previous.name}", "ok",
+                      elapsed=round(previous.offset_s, 2))
+            return previous
+
+    if samples is None:
+        LOG.warning("ENGINE_NO_AUDIO engine=%s", engine.name)
+        play_asset(backend, root, "fallback_question.wav")
+        return None
+
+    if cfg.get("ack_before_reply", True):
+        play_asset(backend, root, "ack_think.wav")
     try:
-        reply = _clip(_ask_with_weather(text))
-    except CloudError as exc:
-        LOG.error("chat failed: %s", exc)
+        reply = engine.respond(samples, text, cfg)
+    except EngineError as exc:
+        LOG.error("ENGINE_FAILED engine=%s: %s", engine.name, exc)
+        svc_event("dialog", f"引擎失败({engine.name}): {exc}"[:140], "warn")
         play_asset(backend, root, "fallback_net.wav")
         return None
-    LOG.info("QWEN_REPLY text=%s", reply[:80])
-    svc_event("llm", f"千问回答: {reply[:80]}", "ok", text=reply[:120])
-
-    try:
-        wav = synthesize(reply)
-    except CloudError as exc:
-        LOG.error("tts failed: %s", exc)
+    except Exception as exc:  # noqa: BLE001 - a broken engine must not kill the service
+        LOG.error("ENGINE_ERROR engine=%s %s: %s",
+                  engine.name, type(exc).__name__, exc)
+        svc_event("dialog", f"引擎异常({engine.name}): {type(exc).__name__}", "warn")
         play_asset(backend, root, "fallback_net.wav")
         return None
-
-    tmp = Path(f"/tmp/hjw_reply_{os.getpid()}_{int(time.time() * 1000)}.wav")
-    tmp.write_bytes(wav)
-    LOG.info("REPLY_START")
-    svc_event("tts", "播放回答…", "info")
-    return PlaybackState(
-        path=tmp,
-        name="回答",
-        text=reply,
-        timeout_s=90.0,
-        cleanup=True,
-        done_msg="本轮对话完成，回到待唤醒",
-    )
+    return _state_from_reply(engine, reply)
 
 
 def _run_playback_loop(
@@ -406,6 +435,7 @@ def _run_playback_loop(
     asr: LocalAsr,
     cfg: dict,
     state: PlaybackState | None,
+    engine: Engine | None = None,
 ) -> None:
     current = state
     while current is not None:
@@ -424,71 +454,25 @@ def _run_playback_loop(
             return
 
         command = listen_command_after_barge_in(backend, asr, cfg)
-        if not command:
+        if command.samples is None and not command.text:
             _cleanup_state(current)
             return
         next_state = _playback_from_text(backend, root, asr, cfg,
-                                         command, previous=current)
+                                         command.text, samples=command.samples,
+                                         previous=current, engine=engine)
         if next_state is not current:
             _cleanup_state(current)
         current = next_state
 
 
-def _ask_with_weather(text: str) -> str:
-    """Qwen with a weather tool: answer plain, or fetch live weather and
-    compose a short spoken summary from the fetched facts."""
-    messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
-        {"role": "user", "content": text},
-    ]
-    first = chat_once(messages, tools=[WEATHER_TOOL])
-    calls = load_tool_calls(first)
-    if not calls:
-        reply = (first.get("content") or "").strip()
-        if not reply:
-            raise CloudError("empty assistant reply")
-        return reply
-    # Tool round: run every requested tool, then ask Qwen to compose.
-    messages.append(first)
-    for name, args, call_id in calls:
-        if name == "query_weather":
-            try:
-                result = query_weather(args.get("city_slug", "Hangzhou"))
-            except Exception as exc:
-                result = f"天气查询失败: {exc}"
-            messages.append({
-                "role": "tool",
-                "tool_call_id": call_id,
-                "content": result,
-            })
-    second = chat_once(messages)
-    reply = (second.get("content") or "").strip()
-    if not reply:
-        raise CloudError("empty assistant reply after tool call")
-    LOG.info("QWEN_TOOL_ROUND city=%s", ", ".join(
-        str(a.get("city_slug")) for _, a, _ in calls))
-    return reply
-
-
-def _clip(text: str, maxlen: int = 130) -> str:
-    """Keep replies short for spoken delivery: cut at a sentence boundary."""
-    if len(text) <= maxlen:
-        return text
-    cut = text[:maxlen]
-    for sep in ("。", "！", "？"):
-        idx = cut.rfind(sep)
-        if idx > maxlen // 2:
-            cut = cut[:idx + 1]
-            break
-    else:
-        cut = cut + "。"
-    LOG.info("REPLY_CLIPPED len=%d -> %d", len(text), len(cut))
-    return cut
-
-
-def run_dialogue_round(backend, root: Path, asr: LocalAsr, cfg: dict) -> None:
+def run_dialogue_round(backend, root: Path, asr: LocalAsr, cfg: dict,
+                       engine: Engine | None = None) -> None:
     """One wake->question->answer cycle. Never raises; plays fallbacks."""
+    engine = engine if engine is not None else build_engine(cfg, asr=asr)
+    LOG.info("ENGINE name=%s needs_transcript=%s", engine.name, engine.needs_transcript)
     channel = cfg.get("channel", 0)
+    samples = None
+    text = ""
     for attempt in (1, 2):
         samples = listen_question(
             backend, channel=channel,
@@ -504,17 +488,19 @@ def run_dialogue_round(backend, root: Path, asr: LocalAsr, cfg: dict) -> None:
             LOG.info("EMPTY_LISTEN attempt=2 give up")
             play_asset(backend, root, "fallback_question.wav")
             return
-        text = asr.transcribe(samples)
-        if not text:
-            if attempt == 1:
-                LOG.info("ASR_EMPTY attempt=%d retry", attempt)
-                play_asset(backend, root, "fallback_listen.wav")
-                continue
-            play_asset(backend, root, "fallback_question.wav")
-            return
+        if engine.needs_transcript:
+            text = asr.transcribe(samples)
+            if not text:
+                if attempt == 1:
+                    LOG.info("ASR_EMPTY attempt=%d retry", attempt)
+                    play_asset(backend, root, "fallback_listen.wav")
+                    continue
+                play_asset(backend, root, "fallback_question.wav")
+                return
         break
     else:
         return
 
-    state = _playback_from_text(backend, root, asr, cfg, text)
-    _run_playback_loop(backend, root, asr, cfg, state)
+    state = _playback_from_text(backend, root, asr, cfg, text,
+                                samples=samples, engine=engine)
+    _run_playback_loop(backend, root, asr, cfg, state, engine=engine)

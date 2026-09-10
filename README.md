@@ -70,6 +70,8 @@ dsnoop/dmix 入口、int8 ASR、对话模式默认开）。
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `WAKE_DIALOGUE` | `0` | `1` = 唤醒应答后自动进入一轮 听→识别→千问→TTS |
+| `WAKE_ENGINE` | `pipeline` | 对话引擎：`pipeline`=本地ASR→千问LLM→千问TTS（半在线）<br>`e2e`=录音直发端到端语音模型（GLM-4-Voice，需 `ZHIPUAI_API_KEY`） |
+| `WAKE_ACK_BEFORE_REPLY` | `1` | 出声前先播“嗯，好的”缓冲音 |
 | `WAKE_THRESHOLD` / `WAKE_HITS` | `0.2` / `3` | 唤醒灵敏度：分数阈值 / 连续帧数 |
 | `WAKE_END_SILENCE_S` | `1.2` | 判定“说完了”的静音时长 |
 | `WAKE_LISTEN_DELAY_S` | `0.6` | 应答后等回声消散再开始听 |

@@ -48,21 +48,7 @@ BLOCK = FRAME * 4     # 80 ms stereo S16_LE bytes
 ROOT = Path(__file__).resolve().parent
 LOG = logging.getLogger("hey-jarvis")
 
-EVENT_FILE = os.getenv("HJV_EVENT_FILE", "")
-
-
-def svc_event(card: str, msg: str, level: str = "info", **extra) -> None:
-    """Append a JSONL line consumed by the debug console (web timeline)."""
-    if not EVENT_FILE:
-        return
-    try:
-        line = json.dumps({"t": time.strftime("%H:%M:%S"), "card": card,
-                           "level": level, "msg": msg, **extra},
-                          ensure_ascii=False)
-        with open(EVENT_FILE, "a", encoding="utf-8") as f:
-            f.write(line + "\n")
-    except Exception:
-        pass
+from ova.config import svc_event  # noqa: E402  (re-exported for older imports)
 
 # Model files that are feature extractors, not wake-word classifiers.
 FEATURE_MODELS = {"melspectrogram.onnx", "embedding_model.onnx"}
@@ -78,7 +64,11 @@ DEFAULTS = {
     "cooldown": 3.0,
     # Optional voice-dialogue stage after the wake acknowledgement:
     "dialogue": False,              # WAKE_DIALOGUE=1 enables Qwen voice chat
+    # Dialogue brain: "pipeline" = 本地ASR → 千问LLM → 千问TTS（半在线）
+    #                 "e2e"      = 音频直发端到端语音模型（GLM-4-Voice）
+    "engine": "pipeline",
     "asr_model_dir": "models/asr_sense_voice_zh_en_int8",
+    "ack_before_reply": True,       # 出声前的“嗯，好的”缓冲音（感知提速）
     "end_silence_s": 1.2,
     "max_question_s": 15.0,
     "listen_delay_s": 0.6,          # 应答播放后等回声消散再开始听
@@ -103,7 +93,9 @@ ENV_MAP = {
     "hits": "WAKE_HITS",
     "cooldown": "WAKE_COOLDOWN",
     "dialogue": "WAKE_DIALOGUE",
+    "engine": "WAKE_ENGINE",
     "asr_model_dir": "WAKE_ASR_MODEL_DIR",
+    "ack_before_reply": "WAKE_ACK_BEFORE_REPLY",
     "end_silence_s": "WAKE_END_SILENCE_S",
     "max_question_s": "WAKE_MAX_QUESTION_S",
     "listen_delay_s": "WAKE_LISTEN_DELAY_S",
@@ -119,7 +111,7 @@ ENV_MAP = {
 
 
 def _to_type(name: str, value: str):
-    if name in ("dialogue", "barge_in"):
+    if name in ("dialogue", "barge_in", "ack_before_reply"):
         return value.strip().lower() in ("1", "true", "yes", "on")
     if name == "channel":
         return "mean" if value == "mean" else int(value)
@@ -475,6 +467,7 @@ def main(argv=None) -> int:
     peak = 0.0
     hits = 0
     asr = None
+    engine = None
     try:
         while True:
             # Reopen after an acknowledgement so queued playback echo cannot
@@ -508,8 +501,12 @@ def main(argv=None) -> int:
                     if asr is None:
                         from ova.asr import LocalAsr  # lazy: cloud stage
                         asr = LocalAsr(Path(cfg["asr_model_dir"]))
+                    if engine is None:
+                        from ova.engines import build_engine
+                        engine = build_engine(cfg, asr=asr)
                     from ova.dialogue import run_dialogue_round
-                    run_dialogue_round(backend, responses_dir, asr, cfg)
+                    run_dialogue_round(backend, responses_dir, asr, cfg,
+                                       engine=engine)
                 except Exception as exc:  # never let one bad round kill service
                     LOG.error("DIALOGUE_ERROR %s: %s", type(exc).__name__, exc)
             model.reset()

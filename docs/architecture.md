@@ -36,7 +36,8 @@
 | `api.py` | DashScope HTTP 客户端/异常 | — |
 | `llm.py` | 千问 chat/chat_once（OpenAI 兼容 + tools） | api |
 | `tts.py` | 合成（原生接口→OSS→重采样16k wav） | api |
-| `dialogue.py` | 单轮对话编排：听→识→想→说→兑底 | wake/vad/asr/llm/tts/tools |
+| `engines/` | **对话引擎抽象**：`base.py`(Engine/Reply/工厂) + `pipeline.py`(本地ASR→千问LLM→千问TTS) + `glm_voice.py`(录音直发 GLM-4-Voice) | llm/tts/tools/api |
+| `dialogue.py` | 单轮对话编排：听→路由→引擎→说→打断→兑底（与引擎解耦） | wake/vad/asr/engines |
 | `console.py` | 网页调试台（SSE 事件流 + 分环节测试 + 主服务事件桥） | 全部 |
 | `calibrate.py` | 录音校准：给出建议阈值 | wake/asr |
 | `__main__.py` | `python -m ova wake|console|calibrate` | 全部 |
