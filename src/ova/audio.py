@@ -177,28 +177,63 @@ def mono16k_wav_bytes(audio: np.ndarray) -> bytes:
     return wav_bytes(x.astype(np.int16), rate=RATE, channels=1)
 
 
-def normalize_loudness(samples_i16: np.ndarray, target_rms: float = 0.09,
-                       peak_ceiling: float = 0.97,
-                       max_gain: float = 4.0) -> tuple[np.ndarray, float]:
-    """Scale int16 samples to a consistent speech level; returns (samples, gain).
+def _compress_float(x: np.ndarray, rate: int = RATE, threshold: float = 0.15,
+                    ratio: float = 4.0, attack_ms: float = 5.0,
+                    release_ms: float = 80.0) -> np.ndarray:
+    """One-pole feed-forward compressor on float samples in [-1, 1].
 
-    Measured 2026-09-10: a qwen3-tts reply sits at ~0.086 RMS while a
-    GLM-4-Voice reply sits at ~0.046 (≈5.5 dB quieter, and brighter), which is
-    what made the end-to-end voice sound thin and "robotic" next to the TTS.
-    Gain is capped so the peak stays below ``peak_ceiling`` (no clipping).
+    Cloud speech models can return very peaky audio (measured: RMS 0.036 with a
+    0.67 peak, ~19 dB crest) which cannot be made louder by gain alone without
+    clipping. Taming the peaks first is what actually raises perceived loudness.
+    """
+    try:
+        from scipy.signal import lfilter
+    except Exception:  # noqa: BLE001 - without scipy, skip compression
+        return x
+    env = np.abs(x)
+    a_att = float(np.exp(-1.0 / max(1.0, rate * attack_ms / 1000.0)))
+    a_rel = float(np.exp(-1.0 / max(1.0, rate * release_ms / 1000.0)))
+    fast = lfilter([1.0 - a_att], [1.0, -a_att], env)
+    slow = lfilter([1.0 - a_rel], [1.0, -a_rel], env)
+    env_s = np.maximum(fast, slow)
+    over = env_s > threshold
+    if not np.any(over):
+        return x
+    target_env = threshold + (env_s - threshold) / ratio
+    gain = np.ones_like(env_s)
+    gain[over] = target_env[over] / env_s[over]
+    return (x * gain).astype(np.float32)
+
+
+def normalize_loudness(samples_i16: np.ndarray, target_rms: float = 0.09,
+                       peak_ceiling: float = 0.97, max_gain: float = 6.0,
+                       compress: bool = True,
+                       rate: int = RATE) -> tuple[np.ndarray, float]:
+    """Level int16 speech to ``target_rms``; returns (samples, overall gain).
+
+    Measured 2026-09-10: a qwen3-tts reply sits at ~0.086 RMS while GLM-4-Voice
+    replies arrive around 0.036-0.046 with much higher peaks (≈5-7 dB quieter
+    and brighter), which is what made the end-to-end voice sound thin and
+    "robotic". Peaks are compressed first, then the level is matched, so the
+    result never clips.
     """
     x = np.asarray(samples_i16)
     if x.size == 0:
         return x, 1.0
-    rms = float(np.sqrt(np.mean((x.astype(np.float32) / 32768.0) ** 2)))
-    if rms <= 1e-6:
+    f = x.astype(np.float32) / 32768.0
+    rms_in = float(np.sqrt(np.mean(f ** 2)))
+    if rms_in <= 1e-6:
         return x, 1.0
-    gain = min(target_rms / rms, max_gain)
-    peak = float(np.max(np.abs(x)) / 32768.0)
+    if compress:
+        f = _compress_float(f, rate)
+    rms = float(np.sqrt(np.mean(f ** 2)))
+    gain = min(target_rms / max(rms, 1e-6), max_gain)
+    peak = float(np.max(np.abs(f)))
     if peak > 0 and peak * gain > peak_ceiling:
         gain = peak_ceiling / peak
-    if abs(gain - 1.0) < 0.01:
-        return x, 1.0
-    return np.clip(np.round(x.astype(np.float32) * gain), -32768, 32767).astype(np.int16), gain
+    y = np.clip(f * gain, -1.0, 1.0)
+    out = np.round(y * 32767.0).astype(np.int16)
+    rms_out = float(np.sqrt(np.mean((out.astype(np.float32) / 32768.0) ** 2)))
+    return out, (rms_out / rms_in if rms_in else 1.0)
 
 
