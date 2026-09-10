@@ -42,10 +42,13 @@ DEFAULT_TIMEOUT_S = 30.0
 PRICE_CNY_PER_MTOKENS = 80.0      # 智谱 GLM-4-Voice 原价（元/百万 tokens）
 
 DEFAULT_PERSONA = (
-    "你是展厅导览机器人，用自然口语回答，控制在40字以内。"
-    "用户说中文就用中文回答，说英文就用英文回答；语速稍慢、语气友好。"
-    "不要输出表情符号、列表或 markdown。"
+    "你是展厅导览机器人。回答只用一句话：中文不超过25个字，英文不超过12个单词"
+    "（约3-4秒语音）。用户说中文就用中文回答，说英文就用英文回答。"
+    "不要重复用户的话，不要罗列，不要用列表/表情/markdown。"
 )
+# Measured 2026-09-10 (see docs/glm-voice-poc-2026-09-10.md): the untuned
+# "40 字以内" persona produced 5-11 s of audio; this one keeps replies at
+# ~2-4 s, roughly halving request latency and cost.
 
 
 class GlmVoiceEngine:
