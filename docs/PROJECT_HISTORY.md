@@ -76,7 +76,7 @@
 
 | 参数 | 值 | 说明 |
 |---|---|---|
-| 唤醒 | threshold 0.2 / hits 3 / cooldown 3s | 校准结论：真人得分 0.2~0.97，静噪 <0.13 |
+| 唤醒 | threshold 0.30 / hits 4 / cooldown 3s | 2026-09-10 展厅误触发调优：正常唤醒 0.94~0.997，旧 0.2/3 过于贴近噪声尖峰；详见 wake-tuning-2026-09-10.md |
 | VAD | end_silence 1.2s(对话)/2.0s(调试卡)；listen_delay 0.6s；max 15s | 回声防护+安静帧基线+AGC |
 | ASR | paraformer-zh-int8，num_threads 4，加载 ~15s，识别 ~2.5s/句 | AGC target_rms 0.1，max_gain 8 |
 | LLM | qwen-flash（enable_thinking=False），system 提示 ≤60字 | 天气必须走 query_weather 工具 |
@@ -111,7 +111,7 @@
 - 调试台/服务默认中文语音内容（"在呢"等），换语种需自备应答 wav（16k 立体声）
 
 **待办/方向**（按用户意向）：
-1. 全链路验收后长稳观察（误唤醒率、卡死恢复）
+1. 全链路验收后长稳观察（误唤醒率、卡死恢复；当前试运行 `threshold=0.30 / hits=4`）
 2. 换硬件实测（ReSpeaker 等）：clone→下载模型→设备档案→calibrate
 3. 在线 ASR 对比（待服务商提供 `/v1/audio/transcriptions` 类入口，代码已预留 local/remote 位）
 4. 动作联动（调用 daemon :8000 move API）、多轮对话、展厅知识库
