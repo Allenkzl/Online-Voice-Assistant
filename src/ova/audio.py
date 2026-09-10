@@ -109,3 +109,71 @@ def mono(stereo: np.ndarray, channel):
     return np.ascontiguousarray(stereo[:, int(channel)])
 
 
+# --- WAV / resampling helpers (shared by TTS and end-to-end engines) --------
+
+def wav_bytes(samples: np.ndarray, rate: int = RATE, channels: int = 1) -> bytes:
+    """Wrap raw int16 samples in a WAV container."""
+    import io
+    import wave
+
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(channels)
+        w.setsampwidth(2)
+        w.setframerate(rate)
+        w.writeframes(np.ascontiguousarray(samples, dtype="<i2").tobytes())
+    return buf.getvalue()
+
+
+def linear_resample(samples: np.ndarray, src_rate: int,
+                    dst_rate: int = RATE) -> np.ndarray:
+    """Linear-interpolation resample of int16 samples (fast, adequate)."""
+    if src_rate == dst_rate:
+        return samples
+    n_out = int(round(len(samples) * dst_rate / src_rate))
+    if n_out <= 0:
+        return np.zeros(0, dtype=np.int16)
+    idx = np.linspace(0, len(samples) - 1, n_out)
+    lo = idx.astype(np.int64)
+    hi = np.minimum(lo + 1, len(samples) - 1)
+    frac = (idx - lo).astype(np.float32)
+    return (samples[lo].astype(np.float32) * (1 - frac)
+            + samples[hi].astype(np.float32) * frac).astype(np.int16)
+
+
+def resample(samples: np.ndarray, src_rate: int,
+             dst_rate: int = RATE) -> np.ndarray:
+    """Resample int16 mono; polyphase when scipy is available.
+
+    44.1 kHz -> 16 kHz is a non-integer ratio (160/441), where linear
+    interpolation is audibly worse, so the good filter is preferred.
+    """
+    if src_rate == dst_rate:
+        return samples
+    try:
+        from math import gcd
+
+        from scipy.signal import resample_poly
+
+        g = gcd(int(src_rate), int(dst_rate))
+        out = resample_poly(samples.astype(np.float32),
+                            int(dst_rate) // g, int(src_rate) // g)
+        return np.clip(np.round(out), -32768, 32767).astype(np.int16)
+    except Exception:  # noqa: BLE001 - scipy missing/too old: stay functional
+        return linear_resample(samples, src_rate, dst_rate)
+
+
+def device_wav_bytes(mono_samples: np.ndarray, src_rate: int) -> bytes:
+    """Mono samples at any rate -> 16 kHz stereo WAV, ready for aplay."""
+    mono16 = resample(mono_samples, src_rate)
+    return wav_bytes(np.repeat(mono16, 2), rate=RATE, channels=2)
+
+
+def mono16k_wav_bytes(audio: np.ndarray) -> bytes:
+    """Recorded audio (stereo or mono) -> 16 kHz mono WAV for cloud models."""
+    x = np.asarray(audio)
+    if x.ndim == 2:                       # stereo -> first channel
+        x = x[:, 0]
+    return wav_bytes(x.astype(np.int16), rate=RATE, channels=1)
+
+
