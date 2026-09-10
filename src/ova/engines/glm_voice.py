@@ -42,13 +42,16 @@ DEFAULT_TIMEOUT_S = 30.0
 PRICE_CNY_PER_MTOKENS = 80.0      # 智谱 GLM-4-Voice 原价（元/百万 tokens）
 
 DEFAULT_PERSONA = (
-    "你是展厅导览机器人。回答只用一句话：中文不超过25个字，英文不超过12个单词"
-    "（约3-4秒语音）。用户说中文就用中文回答，说英文就用英文回答。"
-    "不要重复用户的话，不要罗列，不要用列表/表情/markdown。"
+    "你是展厅导览机器人。用一句话回答，最多20个字。不要重复用户的话，"
+    "不要罗列，不要用列表/表情/markdown。用户说什么语言，你就用什么语言回答。"
 )
-# Measured 2026-09-10 (see docs/glm-voice-poc-2026-09-10.md): the untuned
-# "40 字以内" persona produced 5-11 s of audio; this one keeps replies at
-# ~2-4 s, roughly halving request latency and cost.
+# Measured 2026-09-10 (see docs/glm-voice-poc-2026-09-10.md):
+#  * a "40 字以内" persona produced 5-11 s of audio; capping the length keeps
+#    replies at ~2-4 s, roughly halving request latency and cost;
+#  * mentioning English (e.g. "英文不超过12个单词") makes the model answer in
+#    English *even to Chinese input*, so the language rule is phrased without
+#    it — Chinese visitors always get Chinese, English input may still come
+#    back in Chinese (GLM-4-Voice language control is weak).
 
 
 class GlmVoiceEngine:
@@ -73,6 +76,13 @@ class GlmVoiceEngine:
                             or os.getenv("GLM_VOICE_PCM_RATE", DEFAULT_PCM_RATE))
         self.playback_timeout_s = float(cfg.get("e2e_playback_timeout_s")
                                         or os.getenv("E2E_PLAYBACK_TIMEOUT_S", 180.0))
+        # Warm the resampler at startup: the first scipy import inside
+        # device_wav_bytes() cost ~1.9 s on the CM4 (measured 2026-09-10),
+        # which would otherwise land on the first dialogue round.
+        try:
+            device_wav_bytes(np.zeros(64, dtype=np.int16), self.pcm_rate)
+        except Exception as exc:  # noqa: BLE001 - warm-up must never be fatal
+            LOG.warning("E2E_WARMUP_FAILED %s: %s", type(exc).__name__, exc)
         LOG.info("E2E_READY engine=glm-4-voice model=%s url=%s timeout=%.0fs pcm_rate=%d",
                  self.model, self.url, self.timeout_s, self.pcm_rate)
 
