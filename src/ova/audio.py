@@ -177,6 +177,25 @@ def mono16k_wav_bytes(audio: np.ndarray) -> bytes:
     return wav_bytes(x.astype(np.int16), rate=RATE, channels=1)
 
 
+def _condition_float(x: np.ndarray, rate: int = RATE,
+                     fade_ms: float = 8.0) -> np.ndarray:
+    """Remove DC offset and fade the edges of a cloud reply.
+
+    Measured 2026-09-10 on GLM-4-Voice replies: the raw PCM starts with a step
+    (sample 0 sits at ~0.71 while the speech body peaks at ~0.41). That click
+    both limits how loud the reply can be made and is audible as a mechanical
+    "pop" at the start of every answer.
+    """
+    y = x - float(np.mean(x)) if x.size else x
+    n = int(rate * fade_ms / 1000.0)
+    if n > 1 and len(y) > 2 * n:
+        ramp = np.linspace(0.0, 1.0, n, dtype=np.float32)
+        y = y.copy()
+        y[:n] *= ramp
+        y[-n:] *= ramp[::-1]
+    return y
+
+
 def _compress_float(x: np.ndarray, rate: int = RATE, threshold: float = 0.15,
                     ratio: float = 4.0, attack_ms: float = 5.0,
                     release_ms: float = 80.0) -> np.ndarray:
@@ -207,7 +226,7 @@ def _compress_float(x: np.ndarray, rate: int = RATE, threshold: float = 0.15,
 
 def normalize_loudness(samples_i16: np.ndarray, target_rms: float = 0.09,
                        peak_ceiling: float = 0.97, max_gain: float = 6.0,
-                       compress: bool = True,
+                       compress: bool = True, condition: bool = True,
                        rate: int = RATE) -> tuple[np.ndarray, float]:
     """Level int16 speech to ``target_rms``; returns (samples, overall gain).
 
@@ -224,6 +243,8 @@ def normalize_loudness(samples_i16: np.ndarray, target_rms: float = 0.09,
     rms_in = float(np.sqrt(np.mean(f ** 2)))
     if rms_in <= 1e-6:
         return x, 1.0
+    if condition:
+        f = _condition_float(f, rate)
     if compress:
         f = _compress_float(f, rate)
     rms = float(np.sqrt(np.mean(f ** 2)))

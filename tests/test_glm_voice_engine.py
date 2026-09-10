@@ -378,6 +378,24 @@ def test_engine_normalises_and_reports_gain():
     reply.audio_path.unlink(missing_ok=True)
 
 
+
+def test_normalize_removes_the_leading_click_and_dc():
+    """Real GLM replies start with a step (sample 0 ~ 0.71) that sounds like a pop."""
+    body = (np.sin(np.linspace(0, 400, 16000)) * 4000).astype(np.int16)
+    body[0] = 23000                                   # the measured click
+    y, _ = normalize_loudness(body, target_rms=0.09)
+    f = y.astype(np.float32) / 32768.0
+    assert abs(float(f[0])) < 0.01                    # faded in, click gone
+    assert abs(float(f.mean())) < 0.02                # DC removed
+    assert abs(np.max(np.abs(f))) <= 0.99             # never clips
+
+
+def test_normalize_can_be_used_without_conditioning():
+    x = np.zeros(4000, dtype=np.int16)
+    x[0] = 20000
+    y, _ = normalize_loudness(x, condition=False, compress=False)
+    assert int(y[0]) != 0                             # click left in place
+
 # --- direct runner (no pytest required) -------------------------------------
 
 def _main() -> int:
