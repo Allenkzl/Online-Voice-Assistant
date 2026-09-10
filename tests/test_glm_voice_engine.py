@@ -71,7 +71,7 @@ class FakeResponse:
         return False
 
 
-def pcm_b64(seconds: float = 1.0, rate: int = 44100) -> str:
+def pcm_b64(seconds: float = 1.0, rate: int = 24000) -> str:
     t = np.arange(int(seconds * rate)) / rate
     tone = (np.sin(2 * np.pi * 440 * t) * 8000).astype("<i2")
     return base64.b64encode(tone.tobytes()).decode("ascii")
@@ -166,7 +166,7 @@ def test_transcript_is_appended_when_already_known():
 # --- reply decoding ---------------------------------------------------------
 
 def test_reply_audio_is_resampled_to_device_format():
-    fake, _ = capture_call(canned_reply(audio=pcm_b64(2.0)))
+    fake, _ = capture_call(canned_reply(audio=pcm_b64(2.0, 24000)))
     engine = glm.GlmVoiceEngine({})
     with patch(urllib.request, urlopen=fake), \
             patch(os, environ={**os.environ, "ZHIPUAI_API_KEY": "k"}):
@@ -184,7 +184,7 @@ def test_reply_audio_is_resampled_to_device_format():
 
 
 def test_meta_reports_latency_tokens_and_cost():
-    fake, _ = capture_call(canned_reply(audio=pcm_b64(1.5)))
+    fake, _ = capture_call(canned_reply(audio=pcm_b64(1.5, 24000)))
     engine = glm.GlmVoiceEngine({})
     with patch(urllib.request, urlopen=fake), \
             patch(os, environ={**os.environ, "ZHIPUAI_API_KEY": "k"}):
@@ -302,7 +302,7 @@ def test_unexpected_response_shape_is_an_error():
 def test_device_wav_is_poly_resampled_stereo():
     src = samples_16k(1.0)
     upsampled = np.repeat(src, 3)[: int(44100 * 1.0)]       # stand-in for 44.1k
-    wav = device_wav_bytes(upsampled, 44100)
+    wav = device_wav_bytes(upsampled, 44100)                # non-default rate still works
     path = _write_tmp(wav)
     with wave.open(str(path), "rb") as w:
         assert w.getframerate() == 16000 and w.getnchannels() == 2
@@ -395,6 +395,19 @@ def test_normalize_can_be_used_without_conditioning():
     x[0] = 20000
     y, _ = normalize_loudness(x, condition=False, compress=False)
     assert int(y[0]) != 0                             # click left in place
+
+
+def test_default_pcm_rate_matches_measurement():
+    """44100 made playback 1.84x too fast; the measured rate is 24000."""
+    assert glm.DEFAULT_PCM_RATE == 24000
+    assert glm.GlmVoiceEngine({}).pcm_rate == 24000
+    assert glm.GlmVoiceEngine({"glm_voice_pcm_rate": 32000}).pcm_rate == 32000
+
+
+def test_normalisation_uses_the_reply_rate_for_its_time_constants():
+    import inspect
+    src = inspect.getsource(glm.GlmVoiceEngine.respond)
+    assert "rate=self.pcm_rate" in src
 
 # --- direct runner (no pytest required) -------------------------------------
 

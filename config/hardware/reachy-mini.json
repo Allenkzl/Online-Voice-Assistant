@@ -27,5 +27,6 @@
   "barge_in_resume_rewind_s": 0.6,
   "barge_in_log_interval_s": 2.0,
   "speaking_state_file": "/tmp/ova_speaking.state",
-  "glm_voice_target_rms": 0.09
+  "glm_voice_target_rms": 0.09,
+  "glm_voice_pcm_rate": 24000
 }

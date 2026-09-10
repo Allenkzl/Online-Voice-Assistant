@@ -37,7 +37,9 @@ LOG = logging.getLogger("dialogue.e2e")
 DEFAULT_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 DEFAULT_MODEL = "glm-4-voice"
 DEFAULT_API_KEY_ENV = "ZHIPUAI_API_KEY"
-DEFAULT_PCM_RATE = 44100          # verified by a repeat-after-me probe (see docs)
+DEFAULT_PCM_RATE = 24000          # measured: 44100 makes playback 1.84x too fast
+                                  # (the 44100 in the official sample is wrong —
+                                  #  see docs/glm-voice-poc-2026-09-10.md §6.2)
 DEFAULT_TARGET_RMS = 0.09         # match the qwen3-tts reply level (~0.086 RMS)
 DEFAULT_TIMEOUT_S = 30.0
 PRICE_CNY_PER_MTOKENS = 80.0      # 智谱 GLM-4-Voice 原价（元/百万 tokens）
@@ -179,7 +181,8 @@ class GlmVoiceEngine:
         t2 = time.monotonic()
         mono = np.frombuffer(pcm, dtype="<i2")
         level_before = float(np.sqrt(np.mean((mono.astype(np.float32) / 32768.0) ** 2)))
-        mono_norm, gain = normalize_loudness(mono, self.target_rms)
+        mono_norm, gain = normalize_loudness(mono, self.target_rms,
+                                             rate=self.pcm_rate)
         LOG.info("E2E_LEVEL rms_in=%.4f gain=%.2f rms_out=%.4f",
                  level_before, gain,
                  float(np.sqrt(np.mean((mono_norm.astype(np.float32) / 32768.0) ** 2))))
