@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "online-voice-assistant"
 version = "0.1.0"
-description = "Offline wake word + voice dialogue assistant (openWakeWord, sherpa-onnx Paraformer, Qwen/DashScope)"
+description = "Offline wake word + voice dialogue assistant (openWakeWord, sherpa-onnx SenseVoice/Paraformer ASR, Qwen/DashScope)"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"

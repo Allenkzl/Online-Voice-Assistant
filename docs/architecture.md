@@ -13,7 +13,7 @@
  │  [VAD] 回声防护延时 listen_delay → 安静帧基线 → 静音 end_silence 判定说完           │
  │      │  录音(≤max_question_s)                                                    │
  │      ▼                                                                           │
- │  [ASR] sherpa-onnx Paraformer(本地 int8) ─ AGC音量归一 ─ 文字                      │
+ │  [ASR] sherpa-onnx 本地识别(SenseVoice 中英/可回退 Paraformer) ─ AGC ─ 文字        │
  │      ▼                                                                           │
  │  [LLM] 千问 qwen-flash ─ tools(query_weather) 可选 ─ 回复文字                     │
  │      ▼                                                                           │
@@ -43,8 +43,11 @@
 
 ## 设计要点（踩坑沉淀）
 
-1. **唤醒词必须本地离线**（延迟与可用性）；识别用本地 Paraformer（在线
+1. **唤醒词必须本地离线**（延迟与可用性）；识别用本地 sherpa-onnx 模型（在线
    qwen3-asr-flash 需网关支持，当前账户不可用，故做 `local|remote` 预留位）。
+   现在默认 **SenseVoice 中英双语**，中文 Paraformer 保留为回退（换 `asr_model_dir` 即可，
+   `asr.py` 按目录内容自动判别 `sense_voice|paraformer|transducer`）；选型与实测见
+   `docs/asr-bilingual-models-2026-09-10.md`。
 2. **麦克风共享入口**（ALSA dsnoop）：唤醒服务、调试台、daemon 可并存；
    独占 hw 设备会导致其它进程无法采集。多读方有 CPU 开销，正式运行只留一个常驻读方。
 3. **回声是最大敌人**：自己播完应答立刻听，余响会把 VAD 基线抬高数倍，

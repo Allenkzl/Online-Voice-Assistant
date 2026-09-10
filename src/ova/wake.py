@@ -78,7 +78,7 @@ DEFAULTS = {
     "cooldown": 3.0,
     # Optional voice-dialogue stage after the wake acknowledgement:
     "dialogue": False,              # WAKE_DIALOGUE=1 enables Qwen voice chat
-    "asr_model_dir": "models/asr_paraformer_zh_small",
+    "asr_model_dir": "models/asr_sense_voice_zh_en_int8",
     "end_silence_s": 1.2,
     "max_question_s": 15.0,
     "listen_delay_s": 0.6,          # 应答播放后等回声消散再开始听

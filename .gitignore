@@ -4,8 +4,7 @@ __pycache__/
 *.log
 models/*.onnx
 config.json
-models/asr_paraformer_zh_small/
-models/asr_paraformer_zh_int8/
+models/asr_*/
 *.egg-info/
 build/
 dist/

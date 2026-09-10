@@ -465,7 +465,7 @@ background:#0f172a;border-radius:8px;padding:8px}
   <div class=row><button id=wStart>开始监测</button><button id=wStop class=ghost disabled>停止</button></div>
   <div class=big id=wScore>--</div><div id=wHits></div><div class=spark id=wSpark></div>
   <div class=log id=wLog></div></div>
-  <div class=card><h3>② 拾音 + ASR 听写 <span class=tag>本地 · VAD + Paraformer-zh</span></h3>
+  <div class=card><h3>② 拾音 + ASR 听写 <span class=tag>本地 · VAD + 中英双语</span></h3>
    <p>点击按钮后直接说话，停顿约2秒自动转文字（原始录音可回放）。按钮会循环：蓝(待命)→红(聆听)→识别→恢复蓝色。</p>
    <button id=micBtn style="width:100%;padding:14px;font-size:16px;background:#0ea5e9">
    🎤 点我开始（相当于喊“Hey Jarvis”）</button>

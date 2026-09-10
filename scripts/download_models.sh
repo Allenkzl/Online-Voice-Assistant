@@ -1,10 +1,11 @@
 #!/bin/sh
-# Download openWakeWord "hey jarvis" ONNX models + sherpa-onnx Paraformer ASR
-# models into ./models (binaries are never committed to git).
+# Download openWakeWord "hey jarvis" ONNX models + sherpa-onnx ASR models
+# into ./models (binaries are never committed to git).
 #
-# Usage:  ./scripts/download_models.sh [small|full]
-#   small (default): sherpa-onnx-paraformer-zh-small (~78MB, faster)
-#   full           : sherpa-onnx-paraformer-zh-int8 (~228MB, more accurate)
+# Usage:  ./scripts/download_models.sh [sensevoice|small|full]
+#   sensevoice (default): SenseVoice int8, 中英双语 (~163MB, 推荐)
+#   small               : sherpa-onnx-paraformer-zh-small (~78MB, 中文, 更快)
+#   full                : sherpa-onnx-paraformer-zh-int8 (~228MB, 中文, 更准)
 set -eu
 
 DEST="$(dirname "$0")/../models"
@@ -23,23 +24,37 @@ if [ -f "$DEST/SHA256SUMS" ]; then
 fi
 
 # --- ASR model ---
-MODE="${1:-small}"
-if [ "$MODE" = "full" ]; then
-    URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-paraformer-zh-int8-2025-10-07.tar.bz2"
-    DIR="asr_paraformer_zh_int8"
-    FILE="model.int8.onnx"
-else
-    URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-paraformer-zh-small-2024-03-09.tar.bz2"
-    DIR="asr_paraformer_zh_small"
-    FILE="model.int8.onnx"
-fi
+MODE="${1:-sensevoice}"
+case "$MODE" in
+    sensevoice)
+        URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17.tar.bz2"
+        UNPACKED="sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17"
+        DIR="asr_sense_voice_zh_en_int8"
+        ;;
+    small)
+        URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-paraformer-zh-small-2024-03-09.tar.bz2"
+        UNPACKED="sherpa-onnx-paraformer-zh-small-2024-03-09"
+        DIR="asr_paraformer_zh_small"
+        ;;
+    full)
+        URL="https://github.com/k2-fsa/sherpa-onnx/releases/download/asr-models/sherpa-onnx-paraformer-zh-int8-2025-10-07.tar.bz2"
+        UNPACKED="sherpa-onnx-paraformer-zh-int8-2025-10-07"
+        DIR="asr_paraformer_zh_int8"
+        ;;
+    *)
+        echo "usage: $0 [sensevoice|small|full]" >&2
+        exit 2
+        ;;
+esac
+
+FILE="model.int8.onnx"
 if [ ! -f "$DEST/$DIR/$FILE" ]; then
     echo "downloading ASR model ($MODE)..."
     TMP="$(mktemp /tmp/ova_asr.XXXXXX.tar.bz2)"
     curl -fL --retry 3 -o "$TMP" "$URL"
     tar -xjf "$TMP" -C "$DEST"
     rm -f "$TMP"
-    mv "$DEST/sherpa-onnx-paraformer-zh-small-2024-03-09" "$DEST/asr_paraformer_zh_small" 2>/dev/null || true
-    mv "$DEST/sherpa-onnx-paraformer-zh-int8-2025-10-07" "$DEST/asr_paraformer_zh_int8" 2>/dev/null || true
+    mv "$DEST/$UNPACKED" "$DEST/$DIR" 2>/dev/null || true
 fi
 echo "OK: wake models + ASR($MODE) ready in $DEST"
+
