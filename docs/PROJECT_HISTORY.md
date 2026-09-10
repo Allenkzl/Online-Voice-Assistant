@@ -81,6 +81,7 @@
 | ASR | paraformer-zh-int8，num_threads 4，加载 ~15s，识别 ~2.5s/句 | AGC target_rms 0.1，max_gain 8 |
 | LLM | qwen-flash（enable_thinking=False），system 提示 ≤60字 | 天气必须走 query_weather 工具 |
 | TTS | qwen3-tts-flash / voice=Cherry，合成 1~4s | 24k→16k 线性重采样 |
+| 展厅讲解 | 三主题：智慧零售 / 智慧空间 / 应急救灾，中英文预制 WAV | 关键词路由见 `config/solutions.json`，音频位于 `assets/solutions/*_{zh,en}.wav` |
 | 延迟 | 说完→开口 3~8s（含缓冲音后感知 ~1s） | CM4 实测 |
 | 事件桥 | `HJV_EVENT_FILE`=/tmp/ova_events.jsonl | 调试台时间线数据源 |
 
@@ -101,7 +102,7 @@
 
 ## 5. 当前状态 / 已知限制 / 待办
 
-**当前**：机器人全链路可用；GitHub 仓库维护中；daemon 媒体已关（动作控制与 demo 不受影响，声卡采集仅 ova-wake 在读）。
+**当前**：机器人全链路可用；GitHub 仓库维护中；daemon 媒体已关（动作控制与 demo 不受影响，声卡采集仅 ova-wake 在读）。展厅讲解已从“方案一”试点升级为“智慧零售 / 智慧空间 / 应急救灾”三主题中英文预制音频。
 
 **限制**：
 - 单轮对话（每轮需重新唤醒）；无多轮记忆

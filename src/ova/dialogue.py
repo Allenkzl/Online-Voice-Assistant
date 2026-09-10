@@ -141,8 +141,10 @@ def run_dialogue_round(backend, root: Path, asr: LocalAsr, cfg: dict) -> None:
     svc_event("asr", f"识别: {text}", "ok", text=text)
     intro = match_solution_intro(text)
     if intro is not None:
-        LOG.info("SOLUTION_INTRO id=%s file=%s", intro.id, intro.audio_path)
-        svc_event("dialog", f"播放{intro.name}讲解", "ok", text=intro.text[:120])
+        LOG.info("SOLUTION_INTRO id=%s lang=%s file=%s",
+                 intro.id, intro.language, intro.audio_path)
+        svc_event("dialog", f"播放{intro.name}讲解({intro.language})",
+                  "ok", text=intro.text[:120], lang=intro.language)
         if not intro.audio_path.is_file():
             LOG.error("solution intro audio missing: %s", intro.audio_path)
             play_asset(backend, root, "fallback_question.wav")
@@ -153,7 +155,8 @@ def run_dialogue_round(backend, root: Path, asr: LocalAsr, cfg: dict) -> None:
             LOG.error("solution intro playback failed: %s", exc)
             play_asset(backend, root, "fallback_question.wav")
             return
-        svc_event("dialog", f"{intro.name}讲解完成，回到待唤醒", "ok")
+        svc_event("dialog", f"{intro.name}讲解完成，回到待唤醒",
+                  "ok", lang=intro.language)
         return
     # Perceived-latency buffer: answer verbally first, then think.
     play_asset(backend, root, "ack_think.wav")
