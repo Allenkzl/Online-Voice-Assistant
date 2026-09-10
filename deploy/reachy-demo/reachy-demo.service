@@ -1,0 +1,23 @@
+[Unit]
+Description=Reachy Demo (official showroom ambient motion)
+After=reachy-mini-daemon.service
+Requires=reachy-mini-daemon.service
+
+[Service]
+Type=simple
+User=pollen
+StandardOutput=append:/opt/reachy-demo/demo.log
+StandardError=append:/opt/reachy-demo/demo.log
+ExecStart=/usr/bin/python3 /opt/reachy-demo/demo.py
+Restart=on-failure
+RestartSec=5
+Environment=DEMO_IDLE_INTERVAL_S=20
+Environment=DEMO_SPEAKING_INTERVAL_S=10
+Environment=DEMO_SPEAKING_STATE_FILE=/tmp/ova_speaking.state
+Environment=DEMO_SPEAKING_STATE_TTL_S=300
+Environment=DEMO_MOVE_TIMEOUT_S=50
+Environment=DEMO_STUCK_MOVE_WAIT_S=65
+Environment=DEMO_FAILURE_LIMIT=3
+
+[Install]
+WantedBy=multi-user.target

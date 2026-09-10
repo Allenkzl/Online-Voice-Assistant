@@ -1,0 +1,22 @@
+[Unit]
+Description=Reachy Demo watchdog
+After=reachy-mini-daemon.service reachy-demo.service
+Requires=reachy-mini-daemon.service
+
+[Service]
+Type=simple
+StandardOutput=append:/opt/reachy-demo/watchdog.log
+StandardError=append:/opt/reachy-demo/watchdog.log
+ExecStart=/usr/bin/python3 /opt/reachy-demo/watchdog.py
+Restart=always
+RestartSec=5
+Environment=WATCHDOG_CHECK_INTERVAL_S=15
+Environment=WATCHDOG_API_FAILURE_LIMIT=3
+Environment=WATCHDOG_STUCK_MOVE_S=90
+Environment=WATCHDOG_DEMO_LOG=/opt/reachy-demo/demo.log
+Environment=WATCHDOG_LOG_STALE_S=180
+Environment=WATCHDOG_SERVICE_RESTART_COOLDOWN_S=180
+Environment=WATCHDOG_DAEMON_RESTART_COOLDOWN_S=600
+
+[Install]
+WantedBy=multi-user.target

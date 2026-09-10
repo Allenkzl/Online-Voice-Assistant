@@ -34,7 +34,7 @@
 - 三主题展厅讲解：识别到“智慧零售/智慧空间/应急救灾”或对应英文关键词后，直接播放本地预生成中英文讲解音频。
 - 展厅唤醒误触发调优：线上从 `threshold=0.20 / hits=3` 调整为 `threshold=0.30 / hits=4`。
 - 播放中打断：长讲解或 TTS 播放期间继续监听 `Hey Jarvis`，命中后停止当前播放，支持“停止/继续/切换介绍智慧空间”等后续指令。
-- 中英双语 ASR：ASR 从中文 Paraformer 换成 SenseVoice int8（中/英/混说、带标点，`ASR_RESULT` 附带 `lang=zh|en`），中文 Paraformer 保留为回退模型。
+- 中英双语 ASR：ASR 从中文 Paraformer 换成 SenseVoice int8（中/英/中英混说、带标点，`ASR_RESULT` 附带 `lang=zh|en`），中文 Paraformer 保留为回退模型。
 
 ## 重要约定
 
@@ -49,6 +49,7 @@
 - 当前正式中文触发词使用“智慧空间”，不把“智慧家居”作为别名触发。
 - 唤醒调优记录见 `docs/wake-tuning-2026-09-10.md`；再次调优时先复核历史 `WAKE_DETECTED` 分数、背景样本、唤醒样本，再决定是否改 `threshold`/`hits`。
 - 播放中打断记录见 `docs/barge-in-playback-2026-09-10.md`；打断检测使用独立参数，当前建议 `barge_in_threshold=0.30 / barge_in_hits=4`，并用 `BARGE_LISTENING` 日志观察播放期间峰值。
+- 头部待机动作当前恢复为官方 recorded move 库，并新增独立看门狗；记录见 `docs/reachy-demo-official-watchdog-2026-09-10.md`。前一版轻量小幅 `/api/move/goto` 记录见 `docs/reachy-demo-lite-motion-2026-09-10.md`，可作为回退方案。
 
 ## 变更日志
 
@@ -59,4 +60,6 @@
 | 2026-09-10 | `dev` | 将展厅讲解从“方案一/二/三”改为“智慧零售/智慧空间/应急救灾”三主题，并生成中英文预制音频。 |
 | 2026-09-10 | `dev` | 新增播放中 `Hey Jarvis` 打断：可停止、继续或切换到新的展厅讲解。 |
 | 2026-09-10 | `dev` | 将播放中打断阈值从 `0.45/4` 调低到 `0.30/4`，补充 `BARGE_LISTENING` 峰值日志用于现场调优。 |
+| 2026-09-10 | `dev` | 新增轻量展厅待机动作：待机 20 秒一次，说话时 10 秒一次，替代高频官方 recorded moves。 |
 | 2026-09-10 | `feat/asr-sensevoice-bilingual` | ASR 换为 SenseVoice 中英双语（模型类型自动识别，Paraformer 可回退），英文触发词因此真正可用。 |
+| 2026-09-10 | `feat/asr-sensevoice-bilingual` | 待机动作恢复官方 recorded move 库，并新增 `reachy-demo-watchdog` 自动处理卡住动作和服务恢复。 |

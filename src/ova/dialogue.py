@@ -14,6 +14,7 @@ Flow (called by wake_service right after the wake acknowledgement):
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 import logging
 import os
 import subprocess
@@ -129,6 +130,24 @@ def _slice_wav(path: Path, start_s: float) -> Path:
     return tmp_path
 
 
+def _set_speaking_state(cfg: dict, speaking: bool, name: str = "") -> None:
+    path = cfg.get("speaking_state_file")
+    if not path:
+        return
+    try:
+        payload = {
+            "speaking": speaking,
+            "name": name,
+            "updated_at": time.time(),
+        }
+        Path(path).write_text(
+            json.dumps(payload, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    except Exception as exc:  # noqa: BLE001 - state hints must not break speech
+        LOG.warning("SPEAKING_STATE_ERROR %s: %s", type(exc).__name__, exc)
+
+
 def _barge_monitor(backend, cfg: dict, stop_event: threading.Event,
                    interrupt_event: threading.Event, result: dict) -> None:
     try:
@@ -179,9 +198,13 @@ def _barge_monitor(backend, cfg: dict, stop_event: threading.Event,
 def play_interruptible(backend, state: PlaybackState, cfg: dict) -> PlaybackResult:
     """Play audio while listening for Hey Jarvis; return on finish or barge-in."""
     if not cfg.get("barge_in", True):
-        backend.play_file(state.path, timeout=state.timeout_s)
-        return PlaybackResult(completed=True, interrupted=False,
-                              elapsed_s=_wav_duration(state.path))
+        _set_speaking_state(cfg, True, state.name)
+        try:
+            backend.play_file(state.path, timeout=state.timeout_s)
+            return PlaybackResult(completed=True, interrupted=False,
+                                  elapsed_s=_wav_duration(state.path))
+        finally:
+            _set_speaking_state(cfg, False, state.name)
 
     source_duration = _wav_duration(state.path)
     if state.offset_s >= max(0.0, source_duration - 0.1):
@@ -215,6 +238,7 @@ def play_interruptible(backend, state: PlaybackState, cfg: dict) -> PlaybackResu
         daemon=True,
     )
     monitor.start()
+    _set_speaking_state(cfg, True, state.name)
     proc = subprocess.Popen(
         ["aplay", "-q", "-D", backend.output_device, str(play_path)],
     )
@@ -259,6 +283,7 @@ def play_interruptible(backend, state: PlaybackState, cfg: dict) -> PlaybackResu
                 tmp_path.unlink()
             except OSError:
                 pass
+        _set_speaking_state(cfg, False, state.name)
 
 
 def listen_question(backend, channel=0, end_silence_s=1.2,

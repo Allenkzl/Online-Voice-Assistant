@@ -19,5 +19,6 @@
   "barge_in_max_command_s": 6.0,
   "barge_in_listen_delay_s": 0.2,
   "barge_in_resume_rewind_s": 0.6,
-  "barge_in_log_interval_s": 2.0
+  "barge_in_log_interval_s": 2.0,
+  "speaking_state_file": "/tmp/ova_speaking.state"
 }

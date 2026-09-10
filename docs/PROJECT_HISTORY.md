@@ -83,6 +83,7 @@
 | TTS | qwen3-tts-flash / voice=Cherry，合成 1~4s | 24k→16k 线性重采样 |
 | 展厅讲解 | 三主题：智慧零售 / 智慧空间 / 应急救灾，中英文预制 WAV | 关键词路由见 `config/solutions.json`，音频位于 `assets/solutions/*_{zh,en}.wav` |
 | 播放中打断 | `barge_in_threshold=0.30 / barge_in_hits=4` | 长音频播放时监听 `Hey Jarvis`，打断后支持停止、继续、切换讲解；每 2s 记录 `BARGE_LISTENING peak_score/rms` 便于调优 |
+| 待机动作 | 官方 recorded move 库，待机 20s / 说话 10s，外置看门狗 | 现场观感比轻量 `goto` 更灵动；看门狗自动处理卡住 move、demo 无心跳和 daemon API 连续失败 |
 | 延迟 | 说完→开口 3~8s（含缓冲音后感知 ~1s） | CM4 实测 |
 | 事件桥 | `HJV_EVENT_FILE`=/tmp/ova_events.jsonl | 调试台时间线数据源 |
 
@@ -103,7 +104,7 @@
 
 ## 5. 当前状态 / 已知限制 / 待办
 
-**当前**：机器人全链路可用；GitHub 仓库维护中；daemon 媒体已关（动作控制与 demo 不受影响，声卡采集仅 ova-wake 在读）。展厅讲解已从“方案一”试点升级为“智慧零售 / 智慧空间 / 应急救灾”三主题中英文预制音频，并支持播放中喊 `Hey Jarvis` 打断后停止、继续或切换讲解。
+**当前**：机器人全链路可用；GitHub 仓库维护中；daemon 媒体已关（动作控制与 demo 不受影响，声卡采集仅 ova-wake 在读）。展厅讲解已从“方案一”试点升级为“智慧零售 / 智慧空间 / 应急救灾”三主题中英文预制音频，并支持播放中喊 `Hey Jarvis` 打断后停止、继续或切换讲解。待机动作已从轻量 `goto` 恢复为官方 recorded move 库，并新增 `reachy-demo-watchdog` 处理卡住动作与服务恢复。
 
 **限制**：
 - 单轮对话（每轮需重新唤醒）；无多轮记忆

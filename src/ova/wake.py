@@ -89,6 +89,7 @@ DEFAULTS = {
     "barge_in_listen_delay_s": 0.2,
     "barge_in_resume_rewind_s": 0.6,
     "barge_in_log_interval_s": 2.0,
+    "speaking_state_file": "/tmp/ova_speaking.state",
 
 }
 
@@ -113,6 +114,7 @@ ENV_MAP = {
     "barge_in_listen_delay_s": "WAKE_BARGE_IN_LISTEN_DELAY_S",
     "barge_in_resume_rewind_s": "WAKE_BARGE_IN_RESUME_REWIND_S",
     "barge_in_log_interval_s": "WAKE_BARGE_IN_LOG_INTERVAL_S",
+    "speaking_state_file": "WAKE_SPEAKING_STATE_FILE",
 }
 
 
