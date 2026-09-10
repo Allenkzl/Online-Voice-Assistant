@@ -78,7 +78,7 @@ def run_one(path: Path, out_dir: Path, persona: str | None, rate: int | None,
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
-    ap.add_argument("wav", nargs="?", help="16 kHz 单声道/双声道 WAV")
+    ap.add_argument("wav", nargs="*", help="16 kHz 单声道/双声道 WAV（可给多个）")
     ap.add_argument("--dir", help="批量模式：处理目录下所有 *.wav")
     ap.add_argument("--out-dir", default="/tmp/glm_voice_poc", help="回复音频输出目录")
     ap.add_argument("--persona", help="覆盖人设提示词")
@@ -86,7 +86,10 @@ def main() -> int:
     ap.add_argument("--log", default="/tmp/glm_voice_poc.jsonl", help="结果 JSONL 日志")
     args = ap.parse_args()
 
-    if not args.wav and not args.dir:
+    targets = [Path(p) for p in args.wav]
+    if args.dir:
+        targets += [Path(p) for p in sorted(Path(args.dir).glob("*.wav"))]
+    if not targets:
         ap.error("需要给出 wav 文件或 --dir 目录")
 
     out_dir = Path(args.out_dir)
@@ -97,8 +100,6 @@ def main() -> int:
     print(f"model={engine.model} url={engine.url} pcm_rate={engine.pcm_rate} "
           f"timeout={engine.timeout_s:.0f}s")
 
-    targets = ([Path(p) for p in sorted(Path(args.dir).glob("*.wav"))]
-               if args.dir else [Path(args.wav)])
     records = [run_one(p, out_dir, args.persona, args.rate, log_path) for p in targets]
 
     ok = [r for r in records if r.get("ok")]
