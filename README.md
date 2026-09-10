@@ -8,6 +8,9 @@
   可回退中文 Paraformer（`small`/`int8`）；模型类型按目录自动识别
 - **LLM**：通义千问（DashScope OpenAI 兼容接口，`qwen-flash`），带实时天气工具
 - **TTS**：qwen3-tts-flash（在线合成，本地 16k 重采样播放）
+- **对话引擎（可切换）**：`engine=pipeline` 半在线（本地 ASR → 千问 LLM → 千问 TTS）<br>
+  `engine=e2e` 端到端（录音直发 GLM-4-Voice，音频直出）——两条链路共用唤醒/VAD/播放/打断/调试台，
+  切换只改一个配置项，见 [docs/dual-engine-architecture.md](docs/dual-engine-architecture.md)
 - **调试台**：网页分环节测试（唤醒打分/听写/请求/响应/TTS/全链路时间线）
 
 架构图与各环节说明见 [docs/architecture.md](docs/architecture.md)。
@@ -39,6 +42,23 @@ export WAKE_DIALOGUE=1
 > 模型文件不入库：`scripts/download_models.sh` 负责下载并校验；
 > 许可声明见 [MODEL_NOTICE.md](MODEL_NOTICE.md)（商业使用前请自行确认）。
 
+## 两条对话链路
+
+```bash
+# 半在线（默认）：本地 ASR → 千问 LLM → 千问 TTS
+export DASHSCOPE_API_KEY=sk-xxxx
+
+# 端到端：录音直接送 GLM-4-Voice，返回音频直接播
+export ZHIPUAI_API_KEY=xxxx
+export WAKE_ENGINE=e2e            # 或 config.json 里 "engine": "e2e"
+
+# 离线先验证端到端（不需要机器人，一个 wav 进一个 wav 出）
+python3 scripts/glm_voice_poc.py tests/asr_en_smart_retail.wav
+```
+
+切换/回退只改 `engine` 一项，不需要改代码或切分支。端到端模式的限制（无工具调用、非流式、
+访客语音整体上云）见 [docs/dual-engine-architecture.md](docs/dual-engine-architecture.md)。
+
 ## 换硬件适配
 
 1. `arecord -l` / `aplay -l` 查看设备号
@@ -62,8 +82,9 @@ dsnoop/dmix 入口、int8 ASR、对话模式默认开）。
 ```
 
 页面卡片：① 唤醒词实时打分 / ② 拾音+听写（单按钮循环） / ③ 文字→LLM 请求 /
-④ LLM 响应(含工具调用过程) / ⑤ TTS 合成播放 / 底部全链路时间线。
-主服务事件（唤醒/识别文本/千问回答/播放）也会汇入时间线（设 `HJV_EVENT_FILE=/tmp/ova_events.jsonl`）。
+④ LLM 响应(含工具调用过程) / ⑤ TTS 合成播放 / ⑥ 端到端（GLM-4-Voice，录音直进音频直出） /
+底部全链路时间线。
+主服务事件（唤醒/识别文本/千问回答/播放/端到端延迟与用量）也会汇入时间线（设 `HJV_EVENT_FILE=/tmp/ova_events.jsonl`）。
 
 ## 对话模式关键参数（环境变量）
 
