@@ -177,3 +177,28 @@ def mono16k_wav_bytes(audio: np.ndarray) -> bytes:
     return wav_bytes(x.astype(np.int16), rate=RATE, channels=1)
 
 
+def normalize_loudness(samples_i16: np.ndarray, target_rms: float = 0.09,
+                       peak_ceiling: float = 0.97,
+                       max_gain: float = 4.0) -> tuple[np.ndarray, float]:
+    """Scale int16 samples to a consistent speech level; returns (samples, gain).
+
+    Measured 2026-09-10: a qwen3-tts reply sits at ~0.086 RMS while a
+    GLM-4-Voice reply sits at ~0.046 (≈5.5 dB quieter, and brighter), which is
+    what made the end-to-end voice sound thin and "robotic" next to the TTS.
+    Gain is capped so the peak stays below ``peak_ceiling`` (no clipping).
+    """
+    x = np.asarray(samples_i16)
+    if x.size == 0:
+        return x, 1.0
+    rms = float(np.sqrt(np.mean((x.astype(np.float32) / 32768.0) ** 2)))
+    if rms <= 1e-6:
+        return x, 1.0
+    gain = min(target_rms / rms, max_gain)
+    peak = float(np.max(np.abs(x)) / 32768.0)
+    if peak > 0 and peak * gain > peak_ceiling:
+        gain = peak_ceiling / peak
+    if abs(gain - 1.0) < 0.01:
+        return x, 1.0
+    return np.clip(np.round(x.astype(np.float32) * gain), -32768, 32767).astype(np.int16), gain
+
+

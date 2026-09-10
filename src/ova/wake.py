@@ -74,6 +74,7 @@ DEFAULTS = {
     "glm_voice_persona": "",        # 空=用引擎内置人设（展厅导览、40字内、语言跟随）
     "glm_voice_timeout_s": 30.0,
     "glm_voice_pcm_rate": 44100,    # GLM-4-Voice 返回的裸 PCM 采样率
+    "glm_voice_target_rms": 0.09,   # 响度归一化目标（对齐千问TTS的0.086）
     "end_silence_s": 1.2,
     "max_question_s": 15.0,
     "listen_delay_s": 0.6,          # 应答播放后等回声消散再开始听
@@ -105,6 +106,7 @@ ENV_MAP = {
     "glm_voice_persona": "WAKE_GLM_VOICE_PERSONA",
     "glm_voice_timeout_s": "WAKE_GLM_VOICE_TIMEOUT_S",
     "glm_voice_pcm_rate": "WAKE_GLM_VOICE_PCM_RATE",
+    "glm_voice_target_rms": "WAKE_GLM_VOICE_TARGET_RMS",
     "end_silence_s": "WAKE_END_SILENCE_S",
     "max_question_s": "WAKE_MAX_QUESTION_S",
     "listen_delay_s": "WAKE_LISTEN_DELAY_S",
@@ -130,7 +132,7 @@ def _to_type(name: str, value: str):
                  "listen_delay_s", "barge_in_threshold",
                  "barge_in_max_command_s", "barge_in_listen_delay_s",
                  "barge_in_resume_rewind_s", "barge_in_log_interval_s",
-                 "glm_voice_timeout_s"):
+                 "glm_voice_timeout_s", "glm_voice_target_rms"):
         return float(value)
     return value
 

@@ -28,7 +28,8 @@ if str(ROOT / "src") not in sys.path:
 
 os.environ.setdefault("OVA_HOME", str(ROOT))
 
-from ova.audio import device_wav_bytes, linear_resample, mono16k_wav_bytes  # noqa: E402
+from ova.audio import (device_wav_bytes, linear_resample, mono16k_wav_bytes,  # noqa: E402
+                       normalize_loudness)
 from ova.engines import build_engine                                         # noqa: E402
 from ova.engines import glm_voice as glm                                     # noqa: E402
 from ova.engines.base import EngineError                                     # noqa: E402
@@ -334,6 +335,47 @@ def _write_tmp(data: bytes) -> Path:
     with os.fdopen(fd, "wb") as f:
         f.write(data)
     return Path(name)
+
+
+
+# --- loudness normalisation -------------------------------------------------
+
+def test_normalize_lifts_a_quiet_reply_to_the_tts_level():
+    quiet = (np.sin(np.linspace(0, 40, 8000)) * 1500).astype(np.int16)   # ~0.046 RMS
+    out, gain = normalize_loudness(quiet, target_rms=0.09)
+    rms = float(np.sqrt(np.mean((out.astype(np.float32) / 32768.0) ** 2)))
+    assert gain > 1.5
+    assert 0.07 < rms < 0.11            # lands near the qwen3-tts level
+    assert np.max(np.abs(out)) < 32768  # no clipping
+
+
+def test_normalize_does_not_clip_a_loud_reply():
+    loud = (np.sin(np.linspace(0, 40, 8000)) * 32000).astype(np.int16)
+    out, gain = normalize_loudness(loud, target_rms=0.09)
+    assert gain <= 1.0
+    assert np.max(np.abs(out)) <= 32767
+
+
+def test_normalize_leaves_silence_alone():
+    silence = np.zeros(1600, dtype=np.int16)
+    out, gain = normalize_loudness(silence)
+    assert gain == 1.0 and np.array_equal(out, silence)
+
+
+def test_engine_normalises_and_reports_gain():
+    quiet_pcm = base64.b64encode(
+        (np.sin(np.linspace(0, 200, 44100)) * 1200).astype("<i2").tobytes()).decode()
+    fake, _ = capture_call(canned_reply(audio=quiet_pcm))
+    engine = glm.GlmVoiceEngine({})
+    with patch(urllib.request, urlopen=fake), \
+            patch(os, environ={**os.environ, "ZHIPUAI_API_KEY": "k"}):
+        reply = engine.respond(samples_16k(0.5), "", {})
+    assert reply.meta["gain"] > 1.5
+    with wave.open(str(reply.audio_path)) as w:
+        x = np.frombuffer(w.readframes(w.getnframes()), dtype="<i2").astype(np.float32)
+    rms = float(np.sqrt(np.mean((x / 32768.0) ** 2)))
+    assert 0.06 < rms < 0.12            # audible, close to the TTS reference
+    reply.audio_path.unlink(missing_ok=True)
 
 
 # --- direct runner (no pytest required) -------------------------------------

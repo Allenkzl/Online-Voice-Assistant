@@ -28,7 +28,7 @@ from pathlib import Path
 import numpy as np
 
 from ova.api import CloudError
-from ova.audio import device_wav_bytes, mono16k_wav_bytes
+from ova.audio import device_wav_bytes, mono16k_wav_bytes, normalize_loudness
 from ova.config import svc_event
 from ova.engines.base import EngineError, Reply
 
@@ -37,7 +37,8 @@ LOG = logging.getLogger("dialogue.e2e")
 DEFAULT_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
 DEFAULT_MODEL = "glm-4-voice"
 DEFAULT_API_KEY_ENV = "ZHIPUAI_API_KEY"
-DEFAULT_PCM_RATE = 44100          # verified against the official example
+DEFAULT_PCM_RATE = 44100          # verified by a repeat-after-me probe (see docs)
+DEFAULT_TARGET_RMS = 0.09         # match the qwen3-tts reply level (~0.086 RMS)
 DEFAULT_TIMEOUT_S = 30.0
 PRICE_CNY_PER_MTOKENS = 80.0      # 智谱 GLM-4-Voice 原价（元/百万 tokens）
 
@@ -76,6 +77,8 @@ class GlmVoiceEngine:
                             or os.getenv("GLM_VOICE_PCM_RATE", DEFAULT_PCM_RATE))
         self.playback_timeout_s = float(cfg.get("e2e_playback_timeout_s")
                                         or os.getenv("E2E_PLAYBACK_TIMEOUT_S", 180.0))
+        self.target_rms = float(cfg.get("glm_voice_target_rms")
+                                or os.getenv("GLM_VOICE_TARGET_RMS", DEFAULT_TARGET_RMS))
         # Warm the resampler at startup: the first scipy import inside
         # device_wav_bytes() cost ~1.9 s on the CM4 (measured 2026-09-10),
         # which would otherwise land on the first dialogue round.
@@ -175,7 +178,12 @@ class GlmVoiceEngine:
 
         t2 = time.monotonic()
         mono = np.frombuffer(pcm, dtype="<i2")
-        device_wav = device_wav_bytes(mono, self.pcm_rate)
+        level_before = float(np.sqrt(np.mean((mono.astype(np.float32) / 32768.0) ** 2)))
+        mono_norm, gain = normalize_loudness(mono, self.target_rms)
+        LOG.info("E2E_LEVEL rms_in=%.4f gain=%.2f rms_out=%.4f",
+                 level_before, gain,
+                 float(np.sqrt(np.mean((mono_norm.astype(np.float32) / 32768.0) ** 2))))
+        device_wav = device_wav_bytes(mono_norm, self.pcm_rate)
         tmp = Path(f"/tmp/hjw_e2e_{os.getpid()}_{int(time.time() * 1000)}.wav")
         tmp.write_bytes(device_wav)
         convert_s = time.monotonic() - t2
@@ -214,6 +222,7 @@ class GlmVoiceEngine:
                 "encode_s": round(encode_s, 2),
                 "request_s": round(request_s, 2),
                 "convert_s": round(convert_s, 3),
+                "gain": round(gain, 2),
                 "elapsed_s": round(elapsed, 2),
                 "audio_s": round(audio_s, 2),
                 "tokens": tokens,
