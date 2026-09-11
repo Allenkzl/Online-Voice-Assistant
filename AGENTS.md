@@ -30,7 +30,8 @@
 
 ### 活跃分支
 
-- `dev`：调优展厅唤醒灵敏度、移除正式回答前的“好的/嘟嘟”缓冲音，并继续维护三主题讲解、播放中打断与双引擎链路。
+- 无。2026-09-11 已将 `dev` 合并到 `main`；线上当前稳定版本为
+  `pipeline + Silero VAD + SenseVoice`，用户现场确认效果良好。
 
 ### 已完成功能
 
@@ -97,3 +98,4 @@
 | 2026-09-11 | `dev` | 试运行唤醒 `threshold=0.28 / hits=4`，默认关闭正式回答前的 `ack_think.wav` 缓冲音，并让 e2e 首轮不再在唤醒后阻塞加载 ASR。 |
 | 2026-09-11 | `dev` | Reachy Mini 主链路切为 Silero VAD + SenseVoice 中英 ASR；保留 energy VAD 与 Paraformer 中文 ASR 回退。 |
 | 2026-09-11 | `dev` | 线上部署并验证 `pipeline + Silero VAD + SenseVoice`：服务 active，KWS 只加载 `hey_jarvis_v0.1`，用户现场确认效果良好。 |
+| 2026-09-11 | `main` | 合并 `dev` 到 `main`，主分支收口本轮唤醒、VAD、ASR、双引擎、展厅讲解与待机动作改动。 |
