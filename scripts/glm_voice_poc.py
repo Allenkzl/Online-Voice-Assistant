@@ -61,7 +61,7 @@ def run_one(path: Path, out_dir: Path, persona: str | None, rate: int | None,
     print(f"  回复文本: {reply.text}")
     print(f"  延迟: 编码 {meta['encode_s']}s | 请求 {meta['request_s']}s | "
           f"转码 {meta['convert_s']}s | 合计 {meta['elapsed_s']}s (脚本墙钟 {wall:.2f}s)")
-    print(f"  音频: {meta['audio_s']}s @ 44100Hz裸PCM → {out}")
+    print(f"  音频: {meta['audio_s']}s @ {rate or 24000}Hz裸PCM → {out}")
     if meta.get("tokens"):
         print(f"  用量: {meta['tokens']} tokens ≈ ¥{meta['cost_cny']}")
     else:

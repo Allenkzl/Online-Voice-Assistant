@@ -20,6 +20,7 @@ import binascii
 import json
 import logging
 import os
+import socket
 import time
 import urllib.error
 import urllib.request
@@ -41,20 +42,19 @@ DEFAULT_PCM_RATE = 24000          # measured: 44100 makes playback 1.84x too fas
                                   # (the 44100 in the official sample is wrong —
                                   #  see docs/glm-voice-poc-2026-09-10.md §6.2)
 DEFAULT_TARGET_RMS = 0.09         # match the qwen3-tts reply level (~0.086 RMS)
-DEFAULT_TIMEOUT_S = 30.0
+DEFAULT_TIMEOUT_S = 10.0          # measure: p50 1.4 s; a 7 s stall was seen once
 PRICE_CNY_PER_MTOKENS = 80.0      # 智谱 GLM-4-Voice 原价（元/百万 tokens）
 
 DEFAULT_PERSONA = (
-    "你是展厅导览机器人。用一句话回答，最多20个字。不要重复用户的话，"
-    "不要罗列，不要用列表/表情/markdown。用户说什么语言，你就用什么语言回答。"
+    "你是展厅导览机器人。回答必须极简：只说一句话，不超过10个字。"
+    "禁止重复用户的话，禁止罗列，禁止列表/表情/markdown。语言跟随用户。"
 )
-# Measured 2026-09-10 (see docs/glm-voice-poc-2026-09-10.md):
-#  * a "40 字以内" persona produced 5-11 s of audio; capping the length keeps
-#    replies at ~2-4 s, roughly halving request latency and cost;
+# Measured 2026-09-10 (docs/glm-voice-poc-2026-09-10.md):
+#  * a "40 字以内" persona produced 5-11 s of audio; "不超过10个字" lands at
+#    ~3.5-4 s for greetings (longer questions still overshoot — GLM-4-Voice has
+#    no hard length control);
 #  * mentioning English (e.g. "英文不超过12个单词") makes the model answer in
-#    English *even to Chinese input*, so the language rule is phrased without
-#    it — Chinese visitors always get Chinese, English input may still come
-#    back in Chinese (GLM-4-Voice language control is weak).
+#    English *even to Chinese input*, so the language rule says "语言跟随用户".
 
 
 class GlmVoiceEngine:
@@ -122,8 +122,13 @@ class GlmVoiceEngine:
         except urllib.error.HTTPError as exc:
             body = exc.read().decode("utf-8", "replace")[:300]
             raise EngineError(f"HTTP {exc.code}: {body}") from exc
-        except urllib.error.URLError as exc:
-            raise EngineError(f"network error: {exc.reason}") from exc
+        except (urllib.error.URLError, TimeoutError, socket.timeout) as exc:
+            reason = getattr(exc, "reason", exc)
+            if isinstance(exc, (TimeoutError, socket.timeout)):
+                raise EngineError(
+                    f"timeout after {self.timeout_s:.0f}s (no reply from {self.model})"
+                ) from exc
+            raise EngineError(f"network error: {reason}") from exc
         except json.JSONDecodeError as exc:
             raise EngineError(f"bad json from {self.model}: {exc}") from exc
 

@@ -55,6 +55,10 @@
   **没有 Function Calling**（天气工具只在 pipeline），且**非流式**（无"边说边播"，打断只能停播放）。
   固定讲解的关键词路由只对 pipeline 生效；本地 ASR 在 e2e 下仍用于打断后的"停止/继续"指令。
   切换/回退只改配置，不改代码；设计与实测见 `docs/dual-engine-architecture.md`。
+  **e2e 音频链路的既定默认值（都是实测定下来的，别随手改）**：`glm_voice_pcm_rate=24000`
+  （官方示例写的 44100 是错的，会导致播放加速 1.84 倍、又快又尖听不清）、`glm_voice_target_rms=0.09`
+  （对齐千问 TTS 的 0.086；顺序是去直流+淡入淡出 → 压缩峰值 → 响度对齐）、`glm_voice_timeout_s=10`
+  （实测 p50 1.4s，超时播兜底音）、人设"不超过10个字"（端到端模型没有硬性长度控制）。
 - **两条链路不要并行起两个服务**：ALSA 是共享入口（dsnoop/dmix），同时运行会抢麦克风、抢 CPU、互相打断。
 - `assets/*.wav` 会被唤醒应答随机池扫描；兜底音和备份音频应放入子目录。
 - 方案讲解音频路径由 `config/solutions.json` 管理，当前为 `smart_retail`、`smart_space`、`emergency_response` 三个主题，各有 `zh/en` 两套 WAV。

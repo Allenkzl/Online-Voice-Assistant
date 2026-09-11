@@ -409,6 +409,27 @@ def test_normalisation_uses_the_reply_rate_for_its_time_constants():
     src = inspect.getsource(glm.GlmVoiceEngine.respond)
     assert "rate=self.pcm_rate" in src
 
+
+def test_timeout_is_reported_as_an_engine_error():
+    import socket as _socket
+
+    def slow(req, timeout=None):
+        raise _socket.timeout("timed out")
+
+    engine = glm.GlmVoiceEngine({"glm_voice_timeout_s": 10})
+    with patch(urllib.request, urlopen=slow), \
+            patch(os, environ={**os.environ, "ZHIPUAI_API_KEY": "k"}):
+        try:
+            engine.respond(samples_16k(0.1), "", {})
+        except EngineError as exc:
+            assert "timeout after 10s" in str(exc)
+        else:  # pragma: no cover - defensive
+            raise AssertionError("expected EngineError")
+
+
+def test_default_timeout_is_short_enough_for_a_showroom():
+    assert glm.DEFAULT_TIMEOUT_S <= 10.0
+
 # --- direct runner (no pytest required) -------------------------------------
 
 def _main() -> int:

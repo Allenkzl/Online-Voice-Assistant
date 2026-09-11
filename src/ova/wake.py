@@ -72,7 +72,7 @@ DEFAULTS = {
     # 端到端引擎参数（engine=e2e 时生效；需 ZHIPUAI_API_KEY）
     "glm_voice_model": "glm-4-voice",
     "glm_voice_persona": "",        # 空=用引擎内置人设（展厅导览、40字内、语言跟随）
-    "glm_voice_timeout_s": 30.0,
+    "glm_voice_timeout_s": 10.0,   # 超时即播兑底音（实测 p50 仅 1.4s）
     "glm_voice_pcm_rate": 24000,    # GLM-4-Voice 返回的裸 PCM 采样率（24k，非官方示例写的44.1k）
     "glm_voice_target_rms": 0.09,   # 响度归一化目标（对齐千问TTS的0.086）
     "end_silence_s": 1.2,

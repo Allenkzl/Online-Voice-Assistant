@@ -15,7 +15,7 @@
   "ack_before_reply": true,
   "glm_voice_model": "glm-4-voice",
   "glm_voice_persona": "",
-  "glm_voice_timeout_s": 30.0,
+  "glm_voice_timeout_s": 10.0,
   "end_silence_s": 1.2,
   "max_question_s": 15.0,
   "listen_delay_s": 0.6,
