@@ -86,6 +86,27 @@ dsnoop/dmix 入口、int8 ASR、对话模式默认开）。
 底部全链路时间线。
 主服务事件（唤醒/识别文本/千问回答/播放/端到端延迟与用量）也会汇入时间线（设 `HJV_EVENT_FILE=/tmp/ova_events.jsonl`）。
 
+## 部署到机器人（Reachy Mini）
+
+```bash
+# 一键部署 + 切引擎（幂等；自动备份代码与 /etc/ova.env，不会覆盖 models/assets）
+ZHIPUAI_API_KEY=xxx ./scripts/deploy_to_robot.sh              # 切到端到端 e2e
+ENGINE=pipeline ./scripts/deploy_to_robot.sh                  # 回退半在线 pipeline
+
+# 只同步代码不改开关
+DEPLOY_CODE=1 ENGINE=e2e ./scripts/deploy_to_robot.sh
+```
+
+线上要点（详见 [PROJECT_HISTORY.md §1](docs/PROJECT_HISTORY.md)）：
+
+| 项 | 值 |
+|---|---|
+| 项目路径 / 服务 | `/home/pollen/ova`；`ova-wake`、`ova-console`（:8080） |
+| 配置位置 | **没有 config.json**，全部在 `/etc/ova.env`（600） |
+| 部署方式 | 目录非 git 仓库 → 用 rsync 覆盖（脚本已封装） |
+| 运行用户 | `pollen`（因此能用 `~/.asoundrc` 里的 `reachymini_*` 设备别名） |
+| 回退 | `ENGINE=pipeline ./scripts/deploy_to_robot.sh`（10 秒） |
+
 ## 对话模式关键参数（环境变量）
 
 | 变量 | 默认 | 说明 |
@@ -104,14 +125,24 @@ dsnoop/dmix 入口、int8 ASR、对话模式默认开）。
 ## 目录结构
 
 ```
-src/ova/           # 包：config/audio/vad/wake/asr/tools/llm/tts/dialogue/console/calibrate + cli
-config/            # 参数示例 + hardware/ 设备档案
-scripts/           # 模型下载、服务安装
-deploy/            # systemd 单元模板
-assets/            # 应答/兑底音频（16k 立体声 wav）
-models/            # 模型目录（.onnx 不入库，下载脚本填充；含 SHA256SUMS）
-tests/             # 正/负样本 wav 与自测
-docs/architecture.md
+src/ova/                  # 包：config/audio/vad/wake/asr/tools/llm/tts/dialogue/console/calibrate + cli
+src/ova/engines/          # 对话引擎：base(接口) / pipeline(半在线) / glm_voice(端到端)
+config/                   # 参数示例 + hardware/ 设备档案
+scripts/                  # 模型下载、服务安装、机器人部署、端到端离线 PoC
+deploy/                   # systemd 单元模板
+assets/                   # 应答/兑底音频（16k 立体声 wav）
+models/                   # 模型目录（.onnx 不入库，下载脚本填充；含 SHA256SUMS）
+tests/                    # 正/负样本 wav 与自测（60 项，无需硬件/网络）
+docs/
+├── architecture.md                 # 架构与延迟预算
+├── dual-engine-architecture.md     # 双引擎设计与切换方式（先看这个）
+├── PROJECT_HISTORY.md              # 全历程：里程碑、决策、实测、踩坑
+├── asr-bilingual-models-2026-09-10.md   # ASR 中英双语选型
+├── glm-voice-poc-2026-09-10.md          # 端到端实测（含采样率/音频链踩坑）
+├── wake-tuning-2026-09-10.md            # 唤醒阈值调优
+├── showroom-intros-2026-09-10.md        # 三主题展厅讲解
+├── barge-in-playback-2026-09-10.md      # 播放中打断
+└── reachy-demo-official-watchdog-2026-09-10.md  # 待机动作与看门狗
 ```
 
 ## License

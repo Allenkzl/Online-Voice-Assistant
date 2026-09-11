@@ -64,12 +64,28 @@
 8. **可移植性**：所有设备相关项（采集/播放设备、模型目录、应答目录、检测参数）
    均可配置；`auto` 设备回退链 `reachymini_* → default → plughw:0,0`。
 
-## 延迟预算（实测参考，CM4/RPi5 级）
+## 延迟预算（CM4 真机实测）
 
-说完话 → 判定结束 ~1.2s；ASR 0.6~3s（模型与句长相关）；千问 0.6~1.5s；
-TTS 合成 1~4s；总计 3~8s 开口，另加“嗯，好的”缓冲应答先出声（感知提速）。
+**共同前置**：说完话 → 判定结束 ~1.2s；随后按 `engine` 走不同链路。
+
+| 引擎 | 链路 | 分段耗时 | 说完→开口 |
+|---|---|---|---|
+| `pipeline`（半在线） | 本地 ASR → 千问 LLM → 千问 TTS | ASR 0.6~3s（模型与句长相关）+ 千问 0.6~1.5s + TTS 1~4s | **3~8s** |
+| `e2e`（端到端） | 录音直发 GLM-4-Voice，音频直出 | 请求 1.1~1.9s（p50 1.4s，见过 6.95s 卡顿；超时 10s）+ 转码 ~0.05s | **约 2.5~3s** |
+
+两种模式都会先播"嗯，好的"缓冲应答（`ack_before_reply`，感知提速 ~1s）。
+端到端细节（采样率 24kHz、音频规整链、人设长度、成本）见
+[dual-engine-architecture.md](dual-engine-architecture.md) 与 [glm-voice-poc-2026-09-10.md](glm-voice-poc-2026-09-10.md)。
 
 ## 事件流（调试台时间线）
 
-主服务写入 `HJV_EVENT_FILE`(JSONL)，console 尾随并转发 SSE：
-`wake/唤醒命中 → asr/识别:… → llm/千问回答:… → tts/播放 → dialog/本轮完成`。
+主服务写入 `HJV_EVENT_FILE`(JSONL)，console 尾随并转发 SSE。两种引擎的事件并集：
+
+```
+pipeline: wake/唤醒命中 → asr/识别:… → llm/千问回答:… → tts/播放 → dialog/本轮完成
+e2e:      wake/唤醒命中 → e2e/端到端回复(时长,延迟)+用量 → dialog/e2e 回复就绪 → dialog/本轮完成
+两者都会出现：dialog/提示音、dialog/被打断、dialog/引擎失败（含兜底音）
+```
+
+日志关键字（排查时先 grep 这些）：`ENGINE name=`、`ASR_READY`、`E2E_READY`、`E2E_REPLY`、
+`E2E_LATENCY`、`E2E_USAGE`、`E2E_LEVEL`、`REPLY_READY`、`PLAYBACK_DONE`、`BARGE_LISTENING`。
