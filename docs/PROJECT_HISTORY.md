@@ -161,13 +161,25 @@ sudo systemctl restart ova-wake
 
 > 长期建议：机器人项目目录改成 git 仓库（`git init` + 远端），避免"rsync 覆盖 + 手动备份"的运维方式。
 
-## 3. 关键技术参数（实测值，改前先看这里）
+### 阶段八：现场听感微调（09-11，用户现场反馈驱动）
+
+端到端上线后按“用起来别扭”的三条真实反馈做的调整：
+
+| 调整 | 原因 | 现场做法 |
+|---|---|---|
+| 唤醒 `0.30/4 → 0.28/4` | 现场要喊两三次才醒，偏钝 | 试运行；仍钝下一档 `0.25/4`，误触发回升退回 `0.30/4` |
+| **默认关闭正式回答前的缓冲音**（`ack_before_reply=false`） | 说完一句后先插“好的/嘟嘟”再播回答，观感割裂 | 唤醒成功音 `assets/response.wav` 保留；说完直接静默等待答案 |
+| e2e 不再在唤醒后加载本地 ASR | 首轮唤醒后要等 ASR 加载（实测约 13s）才进 VAD | 引擎启动时预热；e2e 下本地 ASR 只在“播放中被打断后的停止/继续短指令”里懒加载（`dialogue._get_command_asr`） |
+
+**权衡记录（重要）**：关掉缓冲音后，“说完→听到声音”的**感知延迟**从 ~1s 变成完整的 2.5~3s（中间没有任何声音填充）。
+当前判断是“不插话 > 少等 1 秒”；若现场觉得等待难熬，可重新打开 `ack_before_reply`，或换成更短更轻的提示音。
+
 
 | 参数 | 值 | 说明 |
 |---|---|---|
 | 唤醒 | threshold 0.28 / hits 4 / cooldown 3s | 2026-09-11 因 `0.30 / 4` 现场唤醒变钝，按回退路径先试 `0.28 / 4`；若仍漏唤醒试 `0.25 / 4`，若误触发回升退回 `0.30 / 4`。详见 wake-tuning-2026-09-10.md |
 | VAD | end_silence 1.2s(对话)/2.0s(调试卡)；listen_delay 0.6s；max 15s | 回声防护+安静帧基线+AGC |
-| ASR | 默认 **SenseVoice int8**（中/英/粤/日/韩，带标点与语种标签）；回退 paraformer-zh-int8。num_threads 4，paraformer 加载 ~15s / 识别 ~2.5s/句 | AGC target_rms 0.1，max_gain 8；静音幻觉护栏：去标点后 ≤1 字符判为没说话 |
+| ASR | 默认 **SenseVoice int8**（中/英/粤/日/韩，带标点与语种标签）；回退 paraformer-zh-int8。num_threads 4，paraformer 加载 ~15s / 识别 ~2.5s/句 | AGC target_rms 0.1，max_gain 8；静音幻觉护栏：去标点后 ≤1 字符判为没说话。⚠️ **但机器人上尚未下载 SenseVoice**：`/etc/ova.env` 的 `WAKE_ASR_MODEL_DIR` 仍指向 `models/asr_paraformer_zh_int8`（纯中文）；e2e 模式下 ASR 只服务打断短指令 |
 | 对话引擎 | `engine=pipeline`(默认) \| `e2e` | pipeline=本地ASR→千问LLM→千问TTS；e2e=录音直发 GLM-4-Voice（不跑本地 ASR）。两条链路共用唤醒/VAD/播放/打断/事件/调试台，一个配置项切换 |
 | 端到端音频 | PCM **24kHz** 单声道 → 去直流+淡入淡出 → 压缩峰值 → 响度对齐 0.09 → 16k 立体声 | 官方示例写的 44100 是错的（会加速 1.84 倍）；参数见 `glm_voice_pcm_rate` / `glm_voice_target_rms` |
 | 端到端超时/人设 | `glm_voice_timeout_s=10` / 人设"不超过10个字" | 实测 p50 1.4s；超时即播兜底音；端到端模型没有硬性长度控制，人设只能压低 |
