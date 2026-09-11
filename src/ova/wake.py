@@ -68,7 +68,7 @@ DEFAULTS = {
     #                 "e2e"      = 音频直发端到端语音模型（GLM-4-Voice）
     "engine": "pipeline",
     "asr_model_dir": "models/asr_sense_voice_zh_en_int8",
-    "ack_before_reply": True,       # 出声前的“嗯，好的”缓冲音（感知提速）
+    "ack_before_reply": False,      # 展厅模式：唤醒音后安静等待正式回答
     # 端到端引擎参数（engine=e2e 时生效；需 ZHIPUAI_API_KEY）
     "glm_voice_model": "glm-4-voice",
     "glm_voice_persona": "",        # 空=用引擎内置人设（展厅导览、40字内、语言跟随）
@@ -465,6 +465,20 @@ def main(argv=None) -> int:
     if args.test_wav:
         return test_wav(model, args.test_wav, cfg["threshold"], args.expect_no_wake)
 
+    asr = None
+    engine = None
+    if cfg.get("dialogue"):
+        try:
+            from ova.engines import build_engine
+            engine = build_engine(cfg, asr=None)
+            if engine.needs_transcript:
+                from ova.asr import LocalAsr  # lazy: only pipeline needs it up front
+                asr = LocalAsr(Path(cfg["asr_model_dir"]))
+                engine = build_engine(cfg, asr=asr)
+        except Exception as exc:  # keep the wake listener alive; retry after wake
+            LOG.error("DIALOGUE_INIT_ERROR %s: %s", type(exc).__name__, exc)
+            engine = None
+
     def shutdown(*_):
         raise KeyboardInterrupt
 
@@ -478,8 +492,6 @@ def main(argv=None) -> int:
     heartbeat = time.monotonic()
     peak = 0.0
     hits = 0
-    asr = None
-    engine = None
     try:
         while True:
             # Reopen after an acknowledgement so queued playback echo cannot
@@ -510,11 +522,12 @@ def main(argv=None) -> int:
             respond(backend, responses_dir)
             if cfg.get("dialogue"):
                 try:
-                    if asr is None:
-                        from ova.asr import LocalAsr  # lazy: cloud stage
-                        asr = LocalAsr(Path(cfg["asr_model_dir"]))
                     if engine is None:
                         from ova.engines import build_engine
+                        engine = build_engine(cfg, asr=asr)
+                    if engine.needs_transcript and asr is None:
+                        from ova.asr import LocalAsr
+                        asr = LocalAsr(Path(cfg["asr_model_dir"]))
                         engine = build_engine(cfg, asr=asr)
                     from ova.dialogue import run_dialogue_round
                     run_dialogue_round(backend, responses_dir, asr, cfg,

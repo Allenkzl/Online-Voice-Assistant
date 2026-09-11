@@ -29,13 +29,14 @@
 
 ### 活跃分支
 
-- `dev`：替换唤醒反馈音、调优展厅唤醒误触发、上线三主题中英文展厅讲解，并开发播放中打断。
+- `dev`：调优展厅唤醒灵敏度、移除正式回答前的“好的/嘟嘟”缓冲音，并继续维护三主题讲解、播放中打断与双引擎链路。
 
 ### 已完成功能
 
 - 本地唤醒后播放 Home Assistant 的 `wake_word_triggered` 提示音，不再播放“在呢”。
 - 三主题展厅讲解：识别到“智慧零售/智慧空间/应急救灾”或对应英文关键词后，直接播放本地预生成中英文讲解音频。
-- 展厅唤醒误触发调优：线上从 `threshold=0.20 / hits=3` 调整为 `threshold=0.30 / hits=4`。
+- 展厅唤醒误触发调优：线上先从 `threshold=0.20 / hits=3` 调到 `0.30 / 4`；2026-09-11 因唤醒变钝，回调为 `0.28 / 4`。
+- 正式回答前的缓冲应答默认关闭：保留唤醒成功音 `assets/response.wav`，但 `ack_before_reply=false`，避免用户说完后插入“好的/嘟嘟”再播放模型回答。
 - 播放中打断：长讲解或 TTS 播放期间继续监听 `Hey Jarvis`，命中后停止当前播放，支持“停止/继续/切换介绍智慧空间”等后续指令。
 - 中英双语 ASR：ASR 从中文 Paraformer 换成 SenseVoice int8（中/英/中英混说、带标点，`ASR_RESULT` 附带 `lang=zh|en`），中文 Paraformer 保留为回退模型。
 - **双引擎架构**：对话大脑抽成 `src/ova/engines/`（`Engine`/`Reply`/`build_engine`），
@@ -60,11 +61,13 @@
   （对齐千问 TTS 的 0.086；顺序是去直流+淡入淡出 → 压缩峰值 → 响度对齐）、`glm_voice_timeout_s=10`
   （实测 p50 1.4s，超时播兜底音）、人设"不超过10个字"（端到端模型没有硬性长度控制）。
 - **两条链路不要并行起两个服务**：ALSA 是共享入口（dsnoop/dmix），同时运行会抢麦克风、抢 CPU、互相打断。
+- `e2e` 模式不应在唤醒后再初始化本地 ASR：端到端引擎启动时预热，唤醒音结束后直接进入 VAD；本地 ASR 只在播放中打断后的“停止/继续”短指令里懒加载。
 - `assets/*.wav` 会被唤醒应答随机池扫描；兜底音和备份音频应放入子目录。
 - 方案讲解音频路径由 `config/solutions.json` 管理，当前为 `smart_retail`、`smart_space`、`emergency_response` 三个主题，各有 `zh/en` 两套 WAV。
 - 当前正式中文触发词使用“智慧空间”，不把“智慧家居”作为别名触发。
 - 唤醒调优记录见 `docs/wake-tuning-2026-09-10.md`；再次调优时先复核历史 `WAKE_DETECTED` 分数、背景样本、唤醒样本，再决定是否改 `threshold`/`hits`。
 - 播放中打断记录见 `docs/barge-in-playback-2026-09-10.md`；打断检测使用独立参数，当前建议 `barge_in_threshold=0.30 / barge_in_hits=4`，并用 `BARGE_LISTENING` 日志观察播放期间峰值。
+- 唤醒灵敏度当前试运行 `threshold=0.28 / hits=4`；若仍需叫多次，下一档试 `0.25 / 4`；若误触发回升，退回 `0.30 / 4`。
 - 头部待机动作当前恢复为官方 recorded move 库，并新增独立看门狗；记录见 `docs/reachy-demo-official-watchdog-2026-09-10.md`。前一版轻量小幅 `/api/move/goto` 记录见 `docs/reachy-demo-lite-motion-2026-09-10.md`，可作为回退方案。
 
 ## 变更日志
@@ -83,3 +86,4 @@
 | 2026-09-10 | `dev` | 抽出可插拔对话引擎（`src/ova/engines/`）：现有 ASR→千问→TTS 路径包成 `pipeline` 引擎，行为不变。 |
 | 2026-09-10 | `dev` | 新增 `e2e` 引擎（GLM-4-Voice 录音直进/音频直出）+ 调试台卡片⑥ + 离线 PoC 脚本；两条链路用一个配置项切换。 |
 | 2026-09-10 | `dev` | e2e 引擎上线实测与修复：采样率纠正为 24kHz（官方示例的 44100 会让播放加速 1.84 倍）、去开头爆音与直流、压缩峰值并对齐响度、人设收紧到 10 字、请求超时降到 10 秒。 |
+| 2026-09-11 | `dev` | 试运行唤醒 `threshold=0.28 / hits=4`，默认关闭正式回答前的 `ack_think.wav` 缓冲音，并让 e2e 首轮不再在唤醒后阻塞加载 ASR。 |

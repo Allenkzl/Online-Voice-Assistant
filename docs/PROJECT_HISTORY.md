@@ -165,7 +165,7 @@ sudo systemctl restart ova-wake
 
 | 参数 | 值 | 说明 |
 |---|---|---|
-| 唤醒 | threshold 0.30 / hits 4 / cooldown 3s | 2026-09-10 展厅误触发调优：正常唤醒 0.94~0.997，旧 0.2/3 过于贴近噪声尖峰；详见 wake-tuning-2026-09-10.md |
+| 唤醒 | threshold 0.28 / hits 4 / cooldown 3s | 2026-09-11 因 `0.30 / 4` 现场唤醒变钝，按回退路径先试 `0.28 / 4`；若仍漏唤醒试 `0.25 / 4`，若误触发回升退回 `0.30 / 4`。详见 wake-tuning-2026-09-10.md |
 | VAD | end_silence 1.2s(对话)/2.0s(调试卡)；listen_delay 0.6s；max 15s | 回声防护+安静帧基线+AGC |
 | ASR | 默认 **SenseVoice int8**（中/英/粤/日/韩，带标点与语种标签）；回退 paraformer-zh-int8。num_threads 4，paraformer 加载 ~15s / 识别 ~2.5s/句 | AGC target_rms 0.1，max_gain 8；静音幻觉护栏：去标点后 ≤1 字符判为没说话 |
 | 对话引擎 | `engine=pipeline`(默认) \| `e2e` | pipeline=本地ASR→千问LLM→千问TTS；e2e=录音直发 GLM-4-Voice（不跑本地 ASR）。两条链路共用唤醒/VAD/播放/打断/事件/调试台，一个配置项切换 |
@@ -176,7 +176,7 @@ sudo systemctl restart ova-wake
 | 展厅讲解 | 三主题：智慧零售 / 智慧空间 / 应急救灾，中英文预制 WAV | 关键词路由见 `config/solutions.json`，音频位于 `assets/solutions/*_{zh,en}.wav` |
 | 播放中打断 | `barge_in_threshold=0.30 / barge_in_hits=4` | 长音频播放时监听 `Hey Jarvis`，打断后支持停止、继续、切换讲解；每 2s 记录 `BARGE_LISTENING peak_score/rms` 便于调优 |
 | 待机动作 | 官方 recorded move 库，待机 20s / 说话 10s，外置看门狗 | 现场观感比轻量 `goto` 更灵动；看门狗自动处理卡住 move、demo 无心跳和 daemon API 连续失败 |
-| 延迟 | pipeline：说完→开口 3~8s；**e2e：约 2.5~3s**（VAD 1.2s + 请求 1.1~1.9s + 转码） | CM4 真机实测，均含"嗯，好的"缓冲音（感知提速 ~1s） |
+| 延迟 | pipeline：说完→开口 3~8s；**e2e：约 2.5~3s**（VAD 1.2s + 请求 1.1~1.9s + 转码） | CM4 真机实测；2026-09-11 起展厅默认关闭"嗯，好的"缓冲音，唤醒提示音后直接等待正式回答 |
 | 事件桥 | `HJV_EVENT_FILE`=/tmp/ova_events.jsonl | 调试台时间线数据源 |
 
 ## 4. 排障方法论（本项目反复验证有效）
@@ -237,7 +237,7 @@ sudo systemctl restart ova-wake
 1. **端到端体验微调**（用户原话"后面再微调一下"）：听感/音色是否可接受、回复长度、是否恢复固定讲解路由
 2. **e2e 模式下恢复固定讲解**：用返回文本做意图路由 → 命中则改播本地预制 WAV（保留"固定文案铁律"）
 3. **英文能力**：轻量 LID 决定语种 + 评估千问 Omni / GLM-Realtime 的英文发音，或英文走回 pipeline
-4. **长稳观察**：端到端链路连续多轮稳定性、请求卡顿比例、误唤醒率（`threshold=0.30 / hits=4`）
+4. **长稳观察**：端到端链路连续多轮稳定性、请求卡顿比例、误唤醒率（当前试运行 `threshold=0.28 / hits=4`）
 5. 机器人项目目录改为 git 仓库（去掉 rsync 覆盖式部署）
 6. 换硬件实测（ReSpeaker 等）：clone→下载模型→设备档案→calibrate
 7. 动作联动（调用 daemon :8000 move API）、多轮对话（GLM 8K 上下文约 20 轮）、展厅知识库

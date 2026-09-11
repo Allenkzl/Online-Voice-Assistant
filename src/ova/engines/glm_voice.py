@@ -4,7 +4,7 @@
 GLM-4-Voice (Zhipu) is a single Chat-Completions call: the utterance goes in
 as base64 WAV next to a persona instruction, and the answer comes back twice —
 as text in ``message.content`` and as **raw PCM** in ``message.audio['data']``
-(44.1 kHz, mono, 16-bit, *no WAV header*), which is resampled to the device's
+(24 kHz, mono, 16-bit, *no WAV header*), which is resampled to the device's
 16 kHz stereo and written to a temporary file for the shared playback loop.
 
 Deliberately not implemented here (see docs/dual-engine-architecture.md):

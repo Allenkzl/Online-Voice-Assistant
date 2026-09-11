@@ -11,8 +11,11 @@ Environment=PYTHONUNBUFFERED=1
 Environment=PYTHONDONTWRITEBYTECODE=1
 Environment=OPENBLAS_NUM_THREADS=1
 Environment=OMP_NUM_THREADS=1
+Environment=WAKE_THRESHOLD=0.28
+Environment=WAKE_HITS=4
+Environment=WAKE_ACK_BEFORE_REPLY=0
 EnvironmentFile=-/etc/ova.env
-ExecStart=__INSTALL_DIR__/.venv/bin/python -m ova wake --threshold 0.30 --hits 4
+ExecStart=__INSTALL_DIR__/.venv/bin/python -m ova wake
 Restart=on-failure
 RestartSec=3
 TimeoutStopSec=5

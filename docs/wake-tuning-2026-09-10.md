@@ -119,6 +119,19 @@ hits = 4
 cooldown = 3.0
 ```
 
+### 2026-09-11 追加调整
+
+现场反馈 `0.30 / 4` 唤醒成功率下降，需要叫多声才中一次。本次按本文原定回退路径先试较温和档：
+
+```text
+threshold = 0.28
+hits = 4
+cooldown = 3.0
+```
+
+同时保持播放中打断参数不变（`barge_in_threshold=0.30 / barge_in_hits=4`），避免机器人播报时误打断升高。
+如果 `0.28 / 4` 仍明显漏唤醒，下一档试 `0.25 / 4`；如果误触发回升，则退回 `0.30 / 4`。
+
 同步修改：
 
 - `deploy/ova-wake.service`
@@ -134,20 +147,27 @@ systemctl status ova-wake --no-pager -l
 journalctl -u ova-wake -n 20 --no-pager
 ```
 
-预期日志：
+2026-09-10 预期日志：
 
 ```text
 READY model_dir=models responses_dir=assets channel=0 threshold=0.30 hits=4 cooldown=3.0s dialogue=on offline=false
+```
+
+2026-09-11 试运行档位的预期日志：
+
+```text
+READY model_dir=models responses_dir=assets channel=0 threshold=0.28 hits=4 cooldown=3.0s dialogue=on offline=false
 ```
 
 ## 回退方法
 
 如果后续测试发现 `0.30 / 4` 漏唤醒明显，可以先回退到较温和的 `0.28 / 4`；如果需要恢复本次调优前参数，则回到 `0.20 / 3`。
 
-临时回退线上服务参数：
+临时回退线上服务参数。如果服务已经改成从 `/etc/ova.env` 读取参数，优先改环境文件；如果仍是旧的
+`ExecStart=... --threshold ... --hits ...`，再改 systemd 命令行参数。
 
 ```bash
-sudo sed -i 's/--threshold 0.30 --hits 4/--threshold 0.2 --hits 3/' /etc/systemd/system/ova-wake.service
+sudo sed -i 's/^WAKE_THRESHOLD=.*/WAKE_THRESHOLD=0.20/; s/^WAKE_HITS=.*/WAKE_HITS=3/' /etc/ova.env
 sudo systemctl daemon-reload
 sudo systemctl restart ova-wake
 journalctl -u ova-wake -n 20 --no-pager

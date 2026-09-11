@@ -44,6 +44,9 @@ LOG = logging.getLogger("dialogue")
 _BARGE_MODEL = None
 _BARGE_MODEL_DIR = None
 _BARGE_MODEL_LOCK = threading.Lock()
+_COMMAND_ASR = None
+_COMMAND_ASR_MODEL_DIR = None
+_COMMAND_ASR_LOCK = threading.Lock()
 
 
 @dataclass
@@ -113,6 +116,24 @@ def _get_barge_model(model_dir: str):
         else:
             _BARGE_MODEL.reset()
         return _BARGE_MODEL
+
+
+def _get_command_asr(asr: LocalAsr | None, cfg: dict) -> LocalAsr | None:
+    """Return an ASR instance for short barge-in commands.
+
+    E2E mode should not pay the local ASR load cost before the user speaks.
+    It only needs ASR after playback is interrupted, when commands such as
+    "停止" and "继续" have to be understood locally.
+    """
+    if asr is not None:
+        return asr
+    model_dir = str(cfg.get("asr_model_dir", "models/asr_sense_voice_zh_en_int8"))
+    global _COMMAND_ASR, _COMMAND_ASR_MODEL_DIR
+    with _COMMAND_ASR_LOCK:
+        if _COMMAND_ASR is None or _COMMAND_ASR_MODEL_DIR != model_dir:
+            _COMMAND_ASR = LocalAsr(Path(model_dir))
+            _COMMAND_ASR_MODEL_DIR = model_dir
+        return _COMMAND_ASR
 
 
 def _wav_duration(path: Path) -> float:
@@ -323,7 +344,13 @@ def listen_command_after_barge_in(backend, asr: LocalAsr, cfg: dict) -> BargeCom
         LOG.info("BARGE_COMMAND_EMPTY")
         svc_event("dialog", "打断后未听到新指令，回到待唤醒", "warn")
         return BargeCommand()
-    text = asr.transcribe(samples) if asr is not None else ""
+    try:
+        command_asr = _get_command_asr(asr, cfg)
+        text = command_asr.transcribe(samples) if command_asr is not None else ""
+    except Exception as exc:  # noqa: BLE001 - e2e can still answer the audio command
+        LOG.warning("BARGE_COMMAND_ASR_UNAVAILABLE %s: %s",
+                    type(exc).__name__, exc)
+        text = ""
     LOG.info("BARGE_COMMAND text=%s", text)
     svc_event("asr", f"打断后识别: {text}", "ok", text=text)
     return BargeCommand(samples=samples, text=text)
@@ -411,7 +438,7 @@ def _playback_from_text(
         play_asset(backend, root, "fallback_question.wav")
         return None
 
-    if cfg.get("ack_before_reply", True):
+    if cfg.get("ack_before_reply", False):
         play_asset(backend, root, "ack_think.wav")
     try:
         reply = engine.respond(samples, text, cfg)

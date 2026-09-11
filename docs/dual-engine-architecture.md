@@ -146,7 +146,7 @@ WAKE_ENGINE=e2e
 | 计费 | ¥80/百万 tokens，输入音频 12.5 token/秒；响应含 `usage` | `Reply.meta.tokens/cost_cny`，日志 `E2E_USAGE` |
 | 上限 | 上下文 8K（约 20 轮）、输出 4K tokens（约 5 分钟音频）、并发 V0=5 | 单轮模式不受影响 |
 | 无 Function Calling | 天气等工具只能留在 pipeline | 文档与代码注释都标注，避免以后误接 |
-| 非流式 | 必须等整段生成完 | 先播 `ack_think.wav` 缓冲音；延迟实测走 PoC |
+| 非流式 | 必须等整段生成完 | 展厅默认关闭 `ack_think.wav` 缓冲音，避免正式回答前插入“好的/嘟嘟”；延迟实测走 PoC |
 | 静音输入 | 上云前由本地 VAD 门控，不会把静音发出去 | 唤醒 + VAD 双重门控，也避免按秒计费浪费 |
 | 错误分类 | 无 key / HTTP 4xx5xx / 网络 / 非法 base64 / 缺 audio 字段 / 响应结构异常 | 全部转 `EngineError` → 播放 `fallback_net.wav` 并记 `dialog` 事件 |
 | 采样率（**踩过坑**） | **官方示例写的 44100 是错的，实际 24 kHz**；按 44.1k 播会加速 1.84 倍、音调拉高，现场听感"叽里咕噜" | 默认 `glm_voice_pcm_rate=24000`；判据用音节速率 + 频谱带边 + 人耳盲听（详见 glm-voice-poc §6.1） |

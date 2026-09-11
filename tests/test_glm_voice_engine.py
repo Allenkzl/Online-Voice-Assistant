@@ -2,7 +2,7 @@
 """GLM-4-Voice engine tests — completely offline (HTTP is stubbed).
 
 Covers the things that are easy to get wrong: the request shape (base64 WAV +
-persona), decoding the **raw PCM** reply, resampling 44.1 kHz -> device format,
+persona), decoding the **raw PCM** reply, resampling 24 kHz -> device format,
 usage/cost accounting and error classification.
 
     python3 tests/test_glm_voice_engine.py

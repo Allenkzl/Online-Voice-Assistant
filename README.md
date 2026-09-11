@@ -95,6 +95,9 @@ ENGINE=pipeline ./scripts/deploy_to_robot.sh                  # 回退半在线 
 
 # 只同步代码不改开关
 DEPLOY_CODE=1 ENGINE=e2e ./scripts/deploy_to_robot.sh
+
+# 默认会写入展厅当前试运行参数：WAKE_THRESHOLD=0.28、WAKE_HITS=4、
+# WAKE_ACK_BEFORE_REPLY=0；可用同名环境变量临时覆盖。
 ```
 
 线上要点（详见 [PROJECT_HISTORY.md §1](docs/PROJECT_HISTORY.md)）：
@@ -113,7 +116,7 @@ DEPLOY_CODE=1 ENGINE=e2e ./scripts/deploy_to_robot.sh
 |---|---|---|
 | `WAKE_DIALOGUE` | `0` | `1` = 唤醒应答后自动进入一轮 听→识别→千问→TTS |
 | `WAKE_ENGINE` | `pipeline` | 对话引擎：`pipeline`=本地ASR→千问LLM→千问TTS（半在线）<br>`e2e`=录音直发端到端语音模型（GLM-4-Voice，需 `ZHIPUAI_API_KEY`） |
-| `WAKE_ACK_BEFORE_REPLY` | `1` | 出声前先播“嗯，好的”缓冲音 |
+| `WAKE_ACK_BEFORE_REPLY` | `0` | 出声前是否先播“嗯，好的”缓冲音；展厅模式默认关闭 |
 | `WAKE_THRESHOLD` / `WAKE_HITS` | `0.2` / `3` | 唤醒灵敏度：分数阈值 / 连续帧数 |
 | `WAKE_END_SILENCE_S` | `1.2` | 判定“说完了”的静音时长 |
 | `WAKE_LISTEN_DELAY_S` | `0.6` | 应答后等回声消散再开始听 |

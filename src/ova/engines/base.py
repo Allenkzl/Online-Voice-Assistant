@@ -19,7 +19,7 @@ ENGINE_ALIASES = {
     "glm-4-voice": "e2e",
     "端到端": "e2e",
 }
-DEFAULT_ACK = "ack_think.wav"     # buffering sound played before a slow reply
+DEFAULT_ACK = "ack_think.wav"     # optional buffering sound before a slow reply
 
 
 class EngineError(RuntimeError):
