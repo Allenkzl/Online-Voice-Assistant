@@ -141,7 +141,7 @@ WAKE_ENGINE=e2e
 |---|---|---|
 | 接口形态 | `POST /api/paas/v4/chat/completions`，`model=glm-4-voice`，标准 Chat Completions（**不需要 WebSocket**） | `engines/glm_voice.py::_post` |
 | 请求体 | `content=[{text: 人设}, {input_audio: {data: base64(wav), format: "wav"}}]` | 上传 **16 kHz 单声道 WAV**（`audio.mono16k_wav_bytes`） |
-| 返回音频 | `message.audio['data']` = base64 **裸 PCM：44.1 kHz / 单声道 / 16 bit，无 WAV 头** | 补头 + `resample_poly` 44.1k→16k + 复制双声道（`audio.device_wav_bytes`） |
+| 返回音频 | `message.audio['data']` = base64 **裸 PCM：24 kHz / 单声道 / 16 bit，无 WAV 头** | 补头 + 去直流/淡入淡出 + 压缩峰值 + 响度对齐 + `resample_poly` 24k→16k + 复制双声道（`audio.device_wav_bytes`） |
 | 返回文本 | `message.content`（回复文本，用于日志/调试台/语言判定） | `Reply.text` |
 | 计费 | ¥80/百万 tokens，输入音频 12.5 token/秒；响应含 `usage` | `Reply.meta.tokens/cost_cny`，日志 `E2E_USAGE` |
 | 上限 | 上下文 8K（约 20 轮）、输出 4K tokens（约 5 分钟音频）、并发 V0=5 | 单轮模式不受影响 |
@@ -149,7 +149,7 @@ WAKE_ENGINE=e2e
 | 非流式 | 必须等整段生成完 | 先播 `ack_think.wav` 缓冲音；延迟实测走 PoC |
 | 静音输入 | 上云前由本地 VAD 门控，不会把静音发出去 | 唤醒 + VAD 双重门控，也避免按秒计费浪费 |
 | 错误分类 | 无 key / HTTP 4xx5xx / 网络 / 非法 base64 / 缺 audio 字段 / 响应结构异常 | 全部转 `EngineError` → 播放 `fallback_net.wav` 并记 `dialog` 事件 |
-| 采样率不确定 | 官方示例按 44100 写文件 | 配置项 `glm_voice_pcm_rate`；PoC 用 `--rate` 听感核对 |
+| 采样率（**踩过坑**） | **官方示例写的 44100 是错的，实际 24 kHz**；按 44.1k 播会加速 1.84 倍、音调拉高，现场听感"叽里咕噜" | 默认 `glm_voice_pcm_rate=24000`；判据用音节速率 + 频谱带边 + 人耳盲听（详见 glm-voice-poc §6.1） |
 
 ---
 
@@ -214,13 +214,15 @@ journalctl -u ova-wake -f | grep -E "ENGINE|E2E_|REPLY_READY|PLAYBACK"
 ## 9. 已知限制 / 未验证项
 
 > **2026-09-10 Phase 0 已实测**（完整数据见 `docs/glm-voice-poc-2026-09-10.md`）：
-> 请求延迟 1.1~1.7s（短回复）、成本 ¥0.014~0.021/轮、输出确认为 44.1kHz 单声道裸 PCM、
-> 中文发音清晰可懂；**英文发音可懂度差**（两个独立 ASR 均无法还原关键词），语言跟随约 3/4 稳定。
+> **真机实测（CM4，2026-09-10/11）**：请求延迟 1.1~1.9s（p50 ≈1.4s，见过一次 6.95s 卡顿）、
+> **说完→开口约 2.5~3s**、成本 ¥0.014~0.025/轮、回复音频 3.5~7.9s（人设压不住长回答）、
+> 中文发音清晰可懂；**英文发音可懂度差**（两个独立 ASR 均无法还原关键词），语言跟随不稳。
+> 采样率实测为 **24 kHz**（官方示例的 44100 会导致播放加速 1.84 倍，见 glm-voice-poc §6.1）。
 
 
 - **英文质量是最大短板**：GLM-4-Voice 中文好、英文差。建议英文访客仍走 pipeline（qwen3-tts），
   或先做“同句英文双引擎合成 + ASR 回听”的客观对比再决定（需机器人上的 DashScope key）。
-- **CM4 真机延迟未做**：本机请求 1.1~1.7s；端到端总延迟（含 VAD）需在机器人上确认（目标 ≤3s）
+- **真机延迟已确认**（2026-09-10/11）：请求 p50 ≈1.4s、说完→开口 ≈2.5~3s，达到目标；仍需观察长稳与卡顿比例
 - **音色不可选**：需人耳判断是否适合展厅调性
 - **远场噪声 + 中英混说**未在展厅环境验证
 - **隐私**：e2e 模式把访客语音整体上传第三方，展厅需要提示与内部合规确认
