@@ -3,7 +3,7 @@
 唤醒词 → 语音对话的全链路语音助手，**本地唤醒/识别 + 在线大模型/TTS**。
 
 - **唤醒词**：openWakeWord（本地 ONNX，离线，~25ms/帧）
-- **拾音 + VAD**：ALSA（dsnoop 共享入口 / 自动探测），回声防护 + 音量归一化
+- **拾音 + VAD**：ALSA（dsnoop 共享入口 / 自动探测）+ Silero VAD（sherpa-onnx，本地 ONNX，可回退能量阈值）
 - **ASR 语音转文字**：sherpa-onnx 本地识别，默认 SenseVoice 中英双语（中/英/粤/日/韩，带标点），
   可回退中文 Paraformer（`small`/`int8`）；模型类型按目录自动识别
 - **LLM**：通义千问（DashScope OpenAI 兼容接口，`qwen-flash`），带实时天气工具
@@ -22,8 +22,8 @@
 python3 -m venv .venv
 .venv/bin/pip install -e .
 
-# 2. 下载模型（默认 SenseVoice 中英双语 ASR；可换中文模型）
-./scripts/download_models.sh            # 中英双语（SenseVoice int8）
+# 2. 下载模型（含 openWakeWord、Silero VAD、默认 SenseVoice 中英双语 ASR）
+./scripts/download_models.sh            # Silero VAD + 中英双语 SenseVoice int8
 # ./scripts/download_models.sh full     # 中文回退：paraformer-zh-int8（更准）
 # ./scripts/download_models.sh small    # 中文回退：paraformer-zh-small（更快）
 
@@ -73,7 +73,7 @@ python3 scripts/glm_voice_poc.py tests/asr_en_smart_retail.wav
    ```
 
 已知参考硬件：`config/hardware/reachy-mini.json`（Reachy Mini：共享
-dsnoop/dmix 入口、int8 ASR、对话模式默认开）。
+dsnoop/dmix 入口、Silero VAD、SenseVoice int8 ASR、对话模式默认开）。
 
 ## 调试台（强烈推荐先用它分环节验证）
 
@@ -97,7 +97,8 @@ ENGINE=pipeline ./scripts/deploy_to_robot.sh                  # 回退半在线 
 DEPLOY_CODE=1 ENGINE=e2e ./scripts/deploy_to_robot.sh
 
 # 默认会写入展厅当前试运行参数：WAKE_THRESHOLD=0.28、WAKE_HITS=4、
-# WAKE_ACK_BEFORE_REPLY=0；可用同名环境变量临时覆盖。
+# WAKE_ACK_BEFORE_REPLY=0、WAKE_VAD_BACKEND=silero、
+# WAKE_ASR_MODEL_DIR=models/asr_sense_voice_zh_en_int8；可用同名环境变量临时覆盖。
 ```
 
 线上要点（详见 [PROJECT_HISTORY.md §1](docs/PROJECT_HISTORY.md)）：
@@ -118,6 +119,9 @@ DEPLOY_CODE=1 ENGINE=e2e ./scripts/deploy_to_robot.sh
 | `WAKE_ENGINE` | `pipeline` | 对话引擎：`pipeline`=本地ASR→千问LLM→千问TTS（半在线）<br>`e2e`=录音直发端到端语音模型（GLM-4-Voice，需 `ZHIPUAI_API_KEY`） |
 | `WAKE_ACK_BEFORE_REPLY` | `0` | 出声前是否先播“嗯，好的”缓冲音；展厅模式默认关闭 |
 | `WAKE_THRESHOLD` / `WAKE_HITS` | `0.2` / `3` | 唤醒灵敏度：分数阈值 / 连续帧数 |
+| `WAKE_VAD_BACKEND` | `energy` | VAD 后端：`silero`=本地 Silero VAD 模型，`energy`=旧自适应能量阈值 |
+| `WAKE_VAD_MODEL_PATH` | `models/silero_vad.onnx` | Silero VAD ONNX 模型路径 |
+| `WAKE_VAD_THRESHOLD` | `0.50` | Silero VAD 语音概率阈值 |
 | `WAKE_END_SILENCE_S` | `1.2` | 判定“说完了”的静音时长 |
 | `WAKE_LISTEN_DELAY_S` | `0.6` | 应答后等回声消散再开始听 |
 | `WAKE_ASR_MODEL_DIR` | `models/asr_sense_voice_zh_en_int8` | ASR 模型目录（可指向 paraformer 中文模型目录回退） |

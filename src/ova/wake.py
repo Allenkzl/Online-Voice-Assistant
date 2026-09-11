@@ -51,7 +51,7 @@ LOG = logging.getLogger("hey-jarvis")
 from ova.config import svc_event  # noqa: E402  (re-exported for older imports)
 
 # Model files that are feature extractors, not wake-word classifiers.
-FEATURE_MODELS = {"melspectrogram.onnx", "embedding_model.onnx"}
+FEATURE_MODELS = {"melspectrogram.onnx", "embedding_model.onnx", "silero_vad.onnx"}
 
 DEFAULTS = {
     "input_device": "auto",
@@ -69,6 +69,11 @@ DEFAULTS = {
     "engine": "pipeline",
     "asr_model_dir": "models/asr_sense_voice_zh_en_int8",
     "ack_before_reply": False,      # 展厅模式：唤醒音后安静等待正式回答
+    "vad_backend": "energy",        # energy=轻量能量阈值; silero=sherpa-onnx Silero VAD
+    "vad_model_path": "models/silero_vad.onnx",
+    "vad_threshold": 0.50,
+    "vad_min_speech_s": 0.25,
+    "vad_buffer_s": 30.0,
     # 端到端引擎参数（engine=e2e 时生效；需 ZHIPUAI_API_KEY）
     "glm_voice_model": "glm-4-voice",
     "glm_voice_persona": "",        # 空=用引擎内置人设（展厅导览、40字内、语言跟随）
@@ -102,6 +107,11 @@ ENV_MAP = {
     "engine": "WAKE_ENGINE",
     "asr_model_dir": "WAKE_ASR_MODEL_DIR",
     "ack_before_reply": "WAKE_ACK_BEFORE_REPLY",
+    "vad_backend": "WAKE_VAD_BACKEND",
+    "vad_model_path": "WAKE_VAD_MODEL_PATH",
+    "vad_threshold": "WAKE_VAD_THRESHOLD",
+    "vad_min_speech_s": "WAKE_VAD_MIN_SPEECH_S",
+    "vad_buffer_s": "WAKE_VAD_BUFFER_S",
     "glm_voice_model": "WAKE_GLM_VOICE_MODEL",
     "glm_voice_persona": "WAKE_GLM_VOICE_PERSONA",
     "glm_voice_timeout_s": "WAKE_GLM_VOICE_TIMEOUT_S",
@@ -129,7 +139,8 @@ def _to_type(name: str, value: str):
     if name in ("hits", "barge_in_hits", "glm_voice_pcm_rate"):
         return int(value)
     if name in ("threshold", "cooldown", "end_silence_s", "max_question_s",
-                 "listen_delay_s", "barge_in_threshold",
+                 "listen_delay_s", "vad_threshold", "vad_min_speech_s",
+                 "vad_buffer_s", "barge_in_threshold",
                  "barge_in_max_command_s", "barge_in_listen_delay_s",
                  "barge_in_resume_rewind_s", "barge_in_log_interval_s",
                  "glm_voice_timeout_s", "glm_voice_target_rms"):
@@ -319,7 +330,9 @@ def score_frame(model: Model, samples: np.ndarray) -> float:
 
 def capture_utterance(backend: AlsaBackend, channel=0, end_silence_s=1.2,
                       max_s=15.0, min_speech_s=0.35, delay_s=0.5,
-                      on_level=None, stop_check=None):
+                      on_level=None, stop_check=None, vad_backend="energy",
+                      vad_model_path="models/silero_vad.onnx",
+                      vad_threshold=0.50, vad_buffer_s=30.0):
     """Record one utterance with an echo-safe VAD.
 
     - Frames are only buffered after ``delay_s`` so the tail of the
@@ -331,6 +344,37 @@ def capture_utterance(backend: AlsaBackend, channel=0, end_silence_s=1.2,
 
     Returns int16 mono samples or None when no speech was detected.
     """
+    if str(vad_backend).strip().lower() == "silero":
+        return capture_utterance_silero(
+            backend,
+            channel=channel,
+            end_silence_s=end_silence_s,
+            max_s=max_s,
+            min_speech_s=min_speech_s,
+            delay_s=delay_s,
+            on_level=on_level,
+            stop_check=stop_check,
+            model_path=vad_model_path,
+            threshold=vad_threshold,
+            buffer_s=vad_buffer_s,
+        )
+    return capture_utterance_energy(
+        backend,
+        channel=channel,
+        end_silence_s=end_silence_s,
+        max_s=max_s,
+        min_speech_s=min_speech_s,
+        delay_s=delay_s,
+        on_level=on_level,
+        stop_check=stop_check,
+    )
+
+
+def capture_utterance_energy(backend: AlsaBackend, channel=0,
+                             end_silence_s=1.2, max_s=15.0,
+                             min_speech_s=0.35, delay_s=0.5,
+                             on_level=None, stop_check=None):
+    """Record one utterance with the original adaptive energy gate."""
     FRAME_S = 0.08
     start = time.monotonic()
     frames: list[np.ndarray] = []
@@ -373,6 +417,104 @@ def capture_utterance(backend: AlsaBackend, channel=0, end_silence_s=1.2,
     if not frames or speech_s < min_speech_s:
         return None
     return np.concatenate(frames)
+
+
+def _resolve_runtime_path(path: str | os.PathLike) -> Path:
+    """Resolve model paths relative to the process cwd first, then repo root."""
+    p = Path(path)
+    if p.is_absolute() or p.exists():
+        return p
+    cwd_path = Path.cwd() / p
+    if cwd_path.exists():
+        return cwd_path
+    return ROOT.parent.parent / p
+
+
+def capture_utterance_silero(backend: AlsaBackend, channel=0,
+                             end_silence_s=1.2, max_s=15.0,
+                             min_speech_s=0.25, delay_s=0.5,
+                             on_level=None, stop_check=None,
+                             model_path="models/silero_vad.onnx",
+                             threshold=0.50, buffer_s=30.0):
+    """Record one utterance with sherpa-onnx's Silero VAD.
+
+    The wake service still drops the post-ack echo tail before feeding the VAD.
+    Silero then decides speech start/end from model probabilities instead of
+    the old adaptive energy threshold, which is more stable across voices and
+    background levels.
+    """
+    model = _resolve_runtime_path(model_path)
+    if not model.is_file():
+        LOG.warning("SILERO_VAD_MISSING path=%s; falling back to energy VAD", model)
+        return capture_utterance_energy(
+            backend, channel=channel, end_silence_s=end_silence_s,
+            max_s=max_s, min_speech_s=min_speech_s, delay_s=delay_s,
+            on_level=on_level, stop_check=stop_check,
+        )
+
+    import sherpa_onnx  # lazy: only needed when Silero VAD is enabled
+
+    config = sherpa_onnx.VadModelConfig()
+    config.silero_vad.model = str(model)
+    config.silero_vad.threshold = float(threshold)
+    config.silero_vad.min_silence_duration = float(end_silence_s)
+    config.silero_vad.min_speech_duration = float(min_speech_s)
+    config.silero_vad.max_speech_duration = float(max_s)
+    config.sample_rate = RATE
+    config.num_threads = 1
+    window_size = int(config.silero_vad.window_size)
+    vad = sherpa_onnx.VoiceActivityDetector(
+        config, buffer_size_in_seconds=float(buffer_s)
+    )
+
+    start = time.monotonic()
+    quiet_end = start + delay_s
+    pending = np.zeros(0, dtype=np.float32)
+    last_level_t = 0.0
+
+    LOG.info(
+        "VAD_READY backend=silero model=%s threshold=%.2f min_speech=%.2fs "
+        "end_silence=%.2fs window=%d",
+        model, float(threshold), float(min_speech_s), float(end_silence_s),
+        window_size,
+    )
+
+    with Capture(backend) as capture:
+        while True:
+            now = time.monotonic()
+            if now - start >= max_s:
+                vad.flush()
+                break
+            if stop_check and stop_check():
+                return None
+            block = capture.read()
+            m = mono(block, channel)
+            if now < quiet_end:
+                continue
+            rms = float(np.sqrt(np.mean(m.astype(np.float32) ** 2)))
+            if on_level and now - last_level_t >= 0.1:
+                on_level(rms)
+                last_level_t = now
+            audio = m.astype(np.float32) / 32768.0
+            pending = np.concatenate([pending, audio])
+            while len(pending) >= window_size:
+                vad.accept_waveform(pending[:window_size])
+                pending = pending[window_size:]
+            if not vad.empty():
+                break
+
+    if vad.empty():
+        return None
+    segment = vad.front
+    samples = np.asarray(segment.samples, dtype=np.float32)
+    vad.pop()
+    if len(samples) < int(min_speech_s * RATE):
+        LOG.info("VAD_SILERO_SHORT speech_s=%.2fs", len(samples) / RATE)
+        return None
+    out = np.clip(np.round(samples * 32767.0), -32768, 32767).astype(np.int16)
+    LOG.info("VAD_SILERO_END speech_s=%.2fs start=%.2fs",
+             len(out) / RATE, float(getattr(segment, "start", 0)) / RATE)
+    return out
 
 
 def test_wav(model: Model, path: Path, threshold: float,

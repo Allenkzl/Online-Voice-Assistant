@@ -13,6 +13,15 @@ setup time by `scripts/download_models.sh` and verified with checksums.
   https://github.com/dscripka/openWakeWord#license
 - ⚠️ Confirm the upstream license yourself before commercial use.
 
+## VAD model (Silero via sherpa-onnx)
+
+- File: `silero_vad.onnx`, unpacked to `models/silero_vad.onnx`
+- Source: k2-fsa/sherpa-onnx `asr-models` release assets
+  https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models
+- Notes: the file is the sherpa-onnx packaged/exported Silero VAD model used
+  by `sherpa_onnx.VoiceActivityDetector`; verify upstream model terms before
+  commercial use.
+
 ## ASR model (sherpa-onnx, local)
 
 Default — bilingual Chinese + English:

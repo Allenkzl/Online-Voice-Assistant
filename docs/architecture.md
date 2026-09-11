@@ -10,7 +10,7 @@
  │      ▼                                                                           │
  │  [应答] aplay assets/*.wav（“在呢”，随机，根目录应答池与兑底音隔离）                │
  │      ▼  (可选 WAKE_DIALOGUE=1)                                                   │
- │  [VAD] 回声防护延时 listen_delay → 安静帧基线 → 静音 end_silence 判定说完           │
+ │  [VAD] 回声防护延时 listen_delay → Silero VAD(可回退 energy) → 判定说完           │
  │      │  录音(≤max_question_s)                                                    │
  │      ▼                                                                           │
  │  [ASR] sherpa-onnx 本地识别(SenseVoice 中英/可回退 Paraformer) ─ AGC ─ 文字        │
@@ -30,7 +30,7 @@
 | `config.py` | 常量、默认参数、事件桥 | 无 |
 | `audio.py` | ALSA 采集/播放后端抽象（未来 PortAudio 换实现不换接口） | config |
 | `wake.py` | 唤醒引擎入口：模型加载、打分、应答、cli main（含对话编排钩子） | audio/config |
-| `vad.py` | 语音活动检测（单句采集） | wake(audio) |
+| `vad.py` | 语音活动检测入口（当前实现仍在 `wake.py`，支持 energy/silero） | wake(audio) |
 | `asr.py` | 本地识别 LocalAsr（模型目录可换 small/int8） | — |
 | `tools.py` | 外部工具（天气 wttr.in，重试+超时） | — |
 | `api.py` | DashScope HTTP 客户端/异常 | — |
@@ -51,9 +51,9 @@
    `docs/asr-bilingual-models-2026-09-10.md`。
 2. **麦克风共享入口**（ALSA dsnoop）：唤醒服务、调试台、daemon 可并存；
    独占 hw 设备会导致其它进程无法采集。多读方有 CPU 开销，正式运行只留一个常驻读方。
-3. **回声是最大敌人**：自己播完应答立刻听，余响会把 VAD 基线抬高数倍，
-   导致“听不懂”。对策：应答后 `listen_delay` 丢弃回声尾；基线取“最安静帧”分位；
-   音量 AGC 归一后再识别。
+3. **回声是最大敌人**：自己播完应答立刻听，余响会干扰 VAD 与 ASR。
+   对策：应答后 `listen_delay` 丢弃回声尾；Reachy Mini 默认用 Silero VAD 判断语音段；
+   旧 energy VAD 仍可回退，音量 AGC 归一后再识别。
 4. **应答池与兑底音隔离**：兑底 wav 放 `assets/fallback/` 子目录，避免被随机应答误播。
 5. **连续帧确认（hits）**：真人喊词持续 ≥0.5s，噪声尖峰为单帧——要求连续 N 帧
    超阈值即可在低阈值(0.2)下同时拿到高召回与低误报。
@@ -66,7 +66,7 @@
 
 ## 延迟预算（CM4 真机实测）
 
-**共同前置**：说完话 → 判定结束 ~1.2s；随后按 `engine` 走不同链路。
+**共同前置**：说完话 → Silero VAD 判定结束（`end_silence_s` 默认 1.2s）；随后按 `engine` 走不同链路。
 `e2e` 引擎在服务启动时初始化/预热，不在唤醒后加载本地 ASR；唤醒提示音结束后直接进入 VAD。
 本地 ASR 只在 `pipeline` 主链路或播放中打断后的短指令识别中使用。
 
@@ -90,5 +90,5 @@ e2e:      wake/唤醒命中 → e2e/端到端回复(时长,延迟)+用量 → di
 两者都会出现：dialog/提示音、dialog/被打断、dialog/引擎失败（含兜底音）
 ```
 
-日志关键字（排查时先 grep 这些）：`ENGINE name=`、`ASR_READY`、`E2E_READY`、`E2E_REPLY`、
+日志关键字（排查时先 grep 这些）：`VAD_READY`、`VAD_SILERO_END`、`ENGINE name=`、`ASR_READY`、`E2E_READY`、`E2E_REPLY`、
 `E2E_LATENCY`、`E2E_USAGE`、`E2E_LEVEL`、`REPLY_READY`、`PLAYBACK_DONE`、`BARGE_LISTENING`。

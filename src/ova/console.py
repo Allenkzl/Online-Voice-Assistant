@@ -28,6 +28,7 @@ import argparse
 import io
 import json
 import logging
+import os
 import queue
 import tempfile
 import threading
@@ -43,7 +44,7 @@ AUDIO_DIR = Path(tempfile.gettempdir()) / "hjw_console"
 AUDIO_DIR.mkdir(exist_ok=True)
 
 from ova.wake import (
-    AlsaBackend, DEFAULTS, capture_utterance, load_model,
+    AlsaBackend, DEFAULTS, ENV_MAP, _to_type, capture_utterance, load_model,
     mono, score_frame,
 )
 from ova.asr import LocalAsr
@@ -52,6 +53,11 @@ from ova.tools import WEATHER_TOOL, load_tool_calls, query_weather
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 LOG = logging.getLogger("console")
+
+CFG = dict(DEFAULTS)
+for _key, _env in ENV_MAP.items():
+    if _env in os.environ:
+        CFG[_key] = _to_type(_key, os.environ[_env])
 
 # ---------------------------------------------------------------- events
 
@@ -105,7 +111,7 @@ def get_backend() -> AlsaBackend:
     global backend
     with backend_lock:
         if backend is None:
-            backend = AlsaBackend(DEFAULTS)
+            backend = AlsaBackend(CFG)
         return backend
 
 
@@ -197,7 +203,7 @@ def wake_model():
     global WAKE_MODEL
     with WAKE_MODEL_LOCK:
         if WAKE_MODEL is None:
-            WAKE_MODEL = load_model(Path(DEFAULTS["model_dir"]))
+            WAKE_MODEL = load_model(Path(CFG["model_dir"]))
             BUS.emit("wake", "info", f"模型加载完成 {next(iter(WAKE_MODEL.models))}")
         return WAKE_MODEL
 
@@ -211,14 +217,14 @@ def wake_monitor():
     with Capture(backend) as cap:
         warmup_end = time.monotonic() + 0.4
         while not ACTIVE.get("wake").stopped():
-            samples = mono(cap.read(), DEFAULTS["channel"])
+            samples = mono(cap.read(), CFG["channel"])
             if time.monotonic() < warmup_end:
                 continue
             score = score_frame(model, samples)
-            hits = hits + 1 if score >= DEFAULTS["threshold"] else 0
+            hits = hits + 1 if score >= CFG["threshold"] else 0
             BUS.emit("wake", "score", "score", score=round(score, 4),
-                     hits=hits, threshold=DEFAULTS["threshold"])
-            if hits >= DEFAULTS["hits"]:
+                     hits=hits, threshold=CFG["threshold"])
+            if hits >= CFG["hits"]:
                 BUS.emit("wake", "wake", f"唤醒命中! score={score:.3f}")
                 hits = 0
     BUS.emit("wake", "info", "监测已停止")
@@ -261,8 +267,7 @@ def get_asr() -> LocalAsr:
     global ASR
     with ASR_LOCK:
         if ASR is None:
-            import os
-            model_dir = os.getenv("WAKE_ASR_MODEL_DIR") or DEFAULTS["asr_model_dir"]
+            model_dir = os.getenv("WAKE_ASR_MODEL_DIR") or CFG["asr_model_dir"]
             ASR = LocalAsr(Path(model_dir))
         return ASR
 
@@ -272,13 +277,17 @@ def _capture_segment(bus_emit, max_s=15.0, end_silence_s=2.0,
     """One utterance via the shared echo-safe VAD (wake_service)."""
     return capture_utterance(
         get_backend(),
-        channel=DEFAULTS["channel"],
+        channel=CFG["channel"],
         end_silence_s=end_silence_s,
         max_s=max_s,
         min_speech_s=min_speech_s,
         delay_s=0.3,
         on_level=lambda rms: bus_emit("vad", "level", "level", rms=round(rms, 1)),
         stop_check=stop_evt,
+        vad_backend=CFG.get("vad_backend", "energy"),
+        vad_model_path=CFG.get("vad_model_path", "models/silero_vad.onnx"),
+        vad_threshold=CFG.get("vad_threshold", 0.50),
+        vad_buffer_s=CFG.get("vad_buffer_s", 30.0),
     )
 
 
@@ -629,7 +638,8 @@ es.onmessage=e=>{const d=JSON.parse(e.data);const t=`${d.t} [${d.card}] ${d.msg}
 es.onerror=()=>{};
 $('ver').textContent='v3';fetch('/api/status').then(r=>r.json()).then(s=>{$('st').innerHTML=
  `<span class=tag>${s.chat_model}</span> <span class=tag>${s.tts_model}/${s.tts_voice}</span>
- <span class=tag>wake ${s.threshold}/${s.hits}帧</span> <span class=tag>dialogue=${s.dialogue}</span>`});
+ <span class=tag>wake ${s.threshold}/${s.hits}帧</span> <span class=tag>vad=${s.vad}</span>
+ <span class=tag>asr=${(s.asr||'').split('/').pop()}</span> <span class=tag>dialogue=${s.dialogue}</span>`});
 </script></body></html>"""
 
 
@@ -673,8 +683,10 @@ class Handler(BaseHTTPRequestHandler):
                 "chat_model": llm.CHAT_MODEL,
                 "tts_model": tts.TTS_MODEL,
                 "tts_voice": tts.TTS_VOICE,
-                "threshold": DEFAULTS["threshold"],
-                "hits": DEFAULTS["hits"],
+                "threshold": CFG["threshold"],
+                "hits": CFG["hits"],
+                "vad": CFG.get("vad_backend", "energy"),
+                "asr": CFG.get("asr_model_dir", ""),
                 "dialogue": os_dialogue(),
             })
             return

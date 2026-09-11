@@ -320,9 +320,15 @@ def listen_question(backend, channel=0, end_silence_s=1.2,
                     max_s=15.0, min_speech_s=0.35, delay_s=0.8):
     """Record one question with the echo-safe VAD (see capture_utterance)."""
     t0 = time.monotonic()
+    backend_cfg = getattr(backend, "cfg", {}) or {}
     samples = capture_utterance(backend, channel=channel,
                                 end_silence_s=end_silence_s, max_s=max_s,
-                                min_speech_s=min_speech_s, delay_s=delay_s)
+                                min_speech_s=min_speech_s, delay_s=delay_s,
+                                vad_backend=backend_cfg.get("vad_backend", "energy"),
+                                vad_model_path=backend_cfg.get(
+                                    "vad_model_path", "models/silero_vad.onnx"),
+                                vad_threshold=backend_cfg.get("vad_threshold", 0.50),
+                                vad_buffer_s=backend_cfg.get("vad_buffer_s", 30.0))
     if samples is None:
         LOG.info("VAD no speech")
     else:

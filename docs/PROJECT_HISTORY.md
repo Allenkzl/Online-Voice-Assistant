@@ -178,8 +178,8 @@ sudo systemctl restart ova-wake
 | 参数 | 值 | 说明 |
 |---|---|---|
 | 唤醒 | threshold 0.28 / hits 4 / cooldown 3s | 2026-09-11 因 `0.30 / 4` 现场唤醒变钝，按回退路径先试 `0.28 / 4`；若仍漏唤醒试 `0.25 / 4`，若误触发回升退回 `0.30 / 4`。详见 wake-tuning-2026-09-10.md |
-| VAD | end_silence 1.2s(对话)/2.0s(调试卡)；listen_delay 0.6s；max 15s | 回声防护+安静帧基线+AGC |
-| ASR | 默认 **SenseVoice int8**（中/英/粤/日/韩，带标点与语种标签）；回退 paraformer-zh-int8。num_threads 4，paraformer 加载 ~15s / 识别 ~2.5s/句 | AGC target_rms 0.1，max_gain 8；静音幻觉护栏：去标点后 ≤1 字符判为没说话。⚠️ **但机器人上尚未下载 SenseVoice**：`/etc/ova.env` 的 `WAKE_ASR_MODEL_DIR` 仍指向 `models/asr_paraformer_zh_int8`（纯中文）；e2e 模式下 ASR 只服务打断短指令 |
+| VAD | **Silero VAD**（`models/silero_vad.onnx`）；threshold 0.50；min_speech 0.25s；end_silence 1.2s(对话)/2.0s(调试卡)；listen_delay 0.6s；max 15s | sherpa-onnx 本地模型判定说话开始/结束，旧自适应能量阈值保留为 `WAKE_VAD_BACKEND=energy` 回退 |
+| ASR | 默认 **SenseVoice int8**（中/英/粤/日/韩，带标点与语种标签）；回退 paraformer-zh-int8。num_threads 4，SenseVoice 模型目录 `models/asr_sense_voice_zh_en_int8` | AGC target_rms 0.1，max_gain 8；静音幻觉护栏：去标点后 ≤1 字符判为没说话。pipeline 模式主链路使用本地 ASR；e2e 模式下 ASR 只服务打断后的“停止/继续”短指令 |
 | 对话引擎 | `engine=pipeline`(默认) \| `e2e` | pipeline=本地ASR→千问LLM→千问TTS；e2e=录音直发 GLM-4-Voice（不跑本地 ASR）。两条链路共用唤醒/VAD/播放/打断/事件/调试台，一个配置项切换 |
 | 端到端音频 | PCM **24kHz** 单声道 → 去直流+淡入淡出 → 压缩峰值 → 响度对齐 0.09 → 16k 立体声 | 官方示例写的 44100 是错的（会加速 1.84 倍）；参数见 `glm_voice_pcm_rate` / `glm_voice_target_rms` |
 | 端到端超时/人设 | `glm_voice_timeout_s=10` / 人设"不超过10个字" | 实测 p50 1.4s；超时即播兜底音；端到端模型没有硬性长度控制，人设只能压低 |

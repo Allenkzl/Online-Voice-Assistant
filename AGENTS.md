@@ -11,6 +11,7 @@
 - Python 3.10+
 - ALSA `arecord` / `aplay`
 - openWakeWord ONNX
+- sherpa-onnx Silero VAD：默认在 Reachy Mini 上替代旧能量阈值 VAD，可回退 `WAKE_VAD_BACKEND=energy`
 - sherpa-onnx 本地 ASR：默认 SenseVoice 中英双语（中/英/粤/日/韩），可回退中文 Paraformer
 - DashScope 千问 `qwen-flash` 与 `qwen3-tts-flash`（pipeline 引擎）
 - 智谱 GLM-4-Voice（e2e 引擎，音频进/音频出）
@@ -39,6 +40,7 @@
 - 正式回答前的缓冲应答默认关闭：保留唤醒成功音 `assets/response.wav`，但 `ack_before_reply=false`，避免用户说完后插入“好的/嘟嘟”再播放模型回答。
 - 播放中打断：长讲解或 TTS 播放期间继续监听 `Hey Jarvis`，命中后停止当前播放，支持“停止/继续/切换介绍智慧空间”等后续指令。
 - 中英双语 ASR：ASR 从中文 Paraformer 换成 SenseVoice int8（中/英/中英混说、带标点，`ASR_RESULT` 附带 `lang=zh|en`），中文 Paraformer 保留为回退模型。
+- 模型 VAD：Reachy Mini 默认用 sherpa-onnx 的 Silero VAD（`models/silero_vad.onnx`），替代旧自适应能量阈值；旧 VAD 可用 `WAKE_VAD_BACKEND=energy` 回退。
 - **双引擎架构**：对话大脑抽成 `src/ova/engines/`（`Engine`/`Reply`/`build_engine`），
   `engine=pipeline`（半在线）与 `engine=e2e`（GLM-4-Voice 音频直进直出）共用唤醒/VAD/播放/打断/事件/调试台；
   切换只改一个配置项。设计说明见 `docs/dual-engine-architecture.md`。
@@ -46,6 +48,8 @@
 ## 重要约定
 
 - Reachy Mini 线上路径是 `/home/pollen/ova`，服务名是 `ova-wake` 与 `ova-console`。
+- VAD 由 `vad_backend` 控制：`silero` 使用 `models/silero_vad.onnx`、`vad_threshold=0.50`、`vad_min_speech_s=0.25`；
+  `energy` 是旧自适应能量阈值回退。Silero VAD 模型小于 1MB，不需要 PyTorch，走当前 `sherpa_onnx=1.13.7`。
 - ASR 模型目录由 `asr_model_dir` 决定，`src/ova/asr.py` 按目录内容自动判别
   `sense_voice|paraformer|transducer`；默认 `models/asr_sense_voice_zh_en_int8`（中英双语），
   回退中文模型只需改这一项。下载用 `scripts/download_models.sh [sensevoice|small|full]`。
@@ -87,3 +91,4 @@
 | 2026-09-10 | `dev` | 新增 `e2e` 引擎（GLM-4-Voice 录音直进/音频直出）+ 调试台卡片⑥ + 离线 PoC 脚本；两条链路用一个配置项切换。 |
 | 2026-09-10 | `dev` | e2e 引擎上线实测与修复：采样率纠正为 24kHz（官方示例的 44100 会让播放加速 1.84 倍）、去开头爆音与直流、压缩峰值并对齐响度、人设收紧到 10 字、请求超时降到 10 秒。 |
 | 2026-09-11 | `dev` | 试运行唤醒 `threshold=0.28 / hits=4`，默认关闭正式回答前的 `ack_think.wav` 缓冲音，并让 e2e 首轮不再在唤醒后阻塞加载 ASR。 |
+| 2026-09-11 | `dev` | Reachy Mini 主链路切为 Silero VAD + SenseVoice 中英 ASR；保留 energy VAD 与 Paraformer 中文 ASR 回退。 |

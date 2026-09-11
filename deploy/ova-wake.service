@@ -14,6 +14,11 @@ Environment=OMP_NUM_THREADS=1
 Environment=WAKE_THRESHOLD=0.28
 Environment=WAKE_HITS=4
 Environment=WAKE_ACK_BEFORE_REPLY=0
+Environment=WAKE_VAD_BACKEND=silero
+Environment=WAKE_VAD_MODEL_PATH=models/silero_vad.onnx
+Environment=WAKE_VAD_THRESHOLD=0.50
+Environment=WAKE_VAD_MIN_SPEECH_S=0.25
+Environment=WAKE_ASR_MODEL_DIR=models/asr_sense_voice_zh_en_int8
 EnvironmentFile=-/etc/ova.env
 ExecStart=__INSTALL_DIR__/.venv/bin/python -m ova wake
 Restart=on-failure
