@@ -10,3 +10,5 @@ build/
 dist/
 
 .DS_Store
+# 本地运维笔记（含凭据，绝不入库）
+docs/local-*.md
