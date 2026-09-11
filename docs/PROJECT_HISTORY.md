@@ -174,6 +174,27 @@ sudo systemctl restart ova-wake
 **权衡记录（重要）**：关掉缓冲音后，“说完→听到声音”的**感知延迟**从 ~1s 变成完整的 2.5~3s（中间没有任何声音填充）。
 当前判断是“不插话 > 少等 1 秒”；若现场觉得等待难熬，可重新打开 `ack_before_reply`，或换成更短更轻的提示音。
 
+### 阶段九：Silero VAD + SenseVoice 上线收口（09-11，用户确认效果良好）
+
+在现场确认“叫醒率、断句、正式回复前不插入好的/嘟嘟”效果都比较好后，将试运行状态整理为可合并版本。
+
+| 节点 | 记录 |
+|---|---|
+| 回滚标签 | `before-silero-sensevoice-20260911`（指向 `cc67e63`） |
+| 合并前提交 | `1e5139a feat: use silero vad and sensevoice on reachy` |
+| 线上部署 | `/home/pollen/ova` 通过 `scripts/deploy_to_robot.sh` rsync 同步；`ova-wake`、`ova-console` 均为 active |
+| 当前主链路 | `WAKE_ENGINE=pipeline`，即本地 ASR → 千问 LLM → 千问 TTS |
+| 唤醒参数 | `WAKE_THRESHOLD=0.28`、`WAKE_HITS=4`、`WAKE_ACK_BEFORE_REPLY=0` |
+| VAD | `WAKE_VAD_BACKEND=silero`，模型 `models/silero_vad.onnx`（629KB），`WAKE_VAD_THRESHOLD=0.50`、`WAKE_VAD_MIN_SPEECH_S=0.25` |
+| ASR | `WAKE_ASR_MODEL_DIR=models/asr_sense_voice_zh_en_int8`，`model.int8.onnx` 229MB，日志 `ASR_READY type=sense_voice threads=4 load=6.8s` |
+| KWS | openWakeWord 只加载 `hey_jarvis_v0.1`；`silero_vad.onnx` 已加入 `FEATURE_MODELS` 排除列表，避免被误当作唤醒模型 |
+| 存储 | Reachy Mini 根分区约 14GB；部署后约 8.8GB 已用、4.5GB 可用（67%） |
+
+**踩坑记录**：第一次把 Silero 模型放进 `models/` 后，openWakeWord 的模型扫描也读到了
+`silero_vad.onnx`，随后在推理时报 `Required inputs (['h', 'c']) are missing from input feed (['x'])`。
+修复方式是把 `silero_vad.onnx` 加进 `FEATURE_MODELS` 非唤醒模型排除列表；远端自检确认
+`wake_models ['hey_jarvis_v0.1']`、`silero_ok ... window_size=512`、`asr_ok sense_voice`。
+
 
 | 参数 | 值 | 说明 |
 |---|---|---|
