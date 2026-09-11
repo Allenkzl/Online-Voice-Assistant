@@ -1,4 +1,4 @@
-"""Shared HTTP client for DashScope (Qwen) cloud services."""
+"""Shared HTTP client for cloud model APIs (DashScope/Qwen, Zhipu/GLM)."""
 
 import json
 import urllib.error
@@ -9,12 +9,17 @@ class CloudError(RuntimeError):
     """Raised when a cloud call fails (network, HTTP error, empty result)."""
 
 
-def http_json(url: str, payload: dict, timeout: float = 25.0) -> dict:
-    """POST JSON with the DashScope bearer key; returns parsed JSON."""
+def http_json(url: str, payload: dict, timeout: float = 25.0,
+              api_key_env: str = "DASHSCOPE_API_KEY") -> dict:
+    """POST JSON with a bearer key from the environment; returns parsed JSON.
+
+    ``api_key_env`` names the variable holding the key, so one helper serves
+    DashScope (Qwen) and other providers (e.g. ZHIPUAI_API_KEY for GLM).
+    """
     import os
-    key = os.environ.get("DASHSCOPE_API_KEY", "")
+    key = os.environ.get(api_key_env, "")
     if not key:
-        raise CloudError("DASHSCOPE_API_KEY is not set")
+        raise CloudError(f"{api_key_env} is not set")
     data = json.dumps(payload).encode("utf-8")
     req = urllib.request.Request(
         url, data=data,

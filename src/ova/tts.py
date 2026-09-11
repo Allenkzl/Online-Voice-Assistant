@@ -9,23 +9,11 @@ import wave
 import numpy as np
 
 from ova.api import CloudError, http_json
+from ova.audio import linear_resample, wav_bytes
 
 TTS_URL = os.getenv("TTS_URL", "https://dashscope.aliyuncs.com/api/v1/services/aigc/multimodal-generation/generation")
 TTS_MODEL = os.getenv("TTS_MODEL", "qwen3-tts-flash")
 TTS_VOICE = os.getenv("TTS_VOICE", "Cherry")
-
-
-def _resample_mono16(x: np.ndarray, src_rate: int) -> np.ndarray:
-    """Linear-interpolation resample of int16 mono samples (fast, adequate)."""
-    if src_rate == 16000:
-        return x
-    n_out = int(round(len(x) * 16000 / src_rate))
-    idx = np.linspace(0, len(x) - 1, n_out)
-    lo = idx.astype(np.int64)
-    hi = np.minimum(lo + 1, len(x) - 1)
-    frac = (idx - lo).astype(np.float32)
-    return (x[lo].astype(np.float32) * (1 - frac)
-            + x[hi].astype(np.float32) * frac).astype(np.int16)
 
 
 def synthesize(text: str, timeout: float = 60.0) -> bytes:
@@ -52,12 +40,5 @@ def synthesize(text: str, timeout: float = 60.0) -> bytes:
         samples = np.frombuffer(wav.readframes(wav.getnframes()), dtype="<i2")
         if wav.getnchannels() > 1:
             samples = samples.reshape(-1, wav.getnchannels()).mean(axis=1).astype(np.int16)
-    mono16 = _resample_mono16(samples, src_rate)
-    stereo = np.repeat(mono16, 2)
-    buf = io.BytesIO()
-    with wave.open(buf, "w") as out:
-        out.setnchannels(2)
-        out.setsampwidth(2)
-        out.setframerate(16000)
-        out.writeframes(stereo.tobytes())
-    return buf.getvalue()
+    mono16 = linear_resample(samples, src_rate, 16000)
+    return wav_bytes(np.repeat(mono16, 2), rate=16000, channels=2)

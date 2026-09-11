@@ -4,8 +4,11 @@ __pycache__/
 *.log
 models/*.onnx
 config.json
-models/asr_paraformer_zh_small/
-models/asr_paraformer_zh_int8/
+models/asr_*/
 *.egg-info/
 build/
 dist/
+
+.DS_Store
+# 本地运维笔记（含凭据，绝不入库）
+docs/local-*.md

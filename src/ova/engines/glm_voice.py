@@ -1,0 +1,264 @@
+#!/usr/bin/env python3
+"""End-to-end engine: recorded audio -> speech model -> audio back.
+
+GLM-4-Voice (Zhipu) is a single Chat-Completions call: the utterance goes in
+as base64 WAV next to a persona instruction, and the answer comes back twice —
+as text in ``message.content`` and as **raw PCM** in ``message.audio['data']``
+(24 kHz, mono, 16-bit, *no WAV header*), which is resampled to the device's
+16 kHz stereo and written to a temporary file for the shared playback loop.
+
+Deliberately not implemented here (see docs/dual-engine-architecture.md):
+the model has no function calling, so tools stay on the pipeline engine, and
+non-streaming replies mean barge-in can only stop playback, not cancel a
+generation still in flight.
+"""
+
+from __future__ import annotations
+
+import base64
+import binascii
+import json
+import logging
+import os
+import socket
+import time
+import urllib.error
+import urllib.request
+from pathlib import Path
+
+import numpy as np
+
+from ova.api import CloudError
+from ova.audio import device_wav_bytes, mono16k_wav_bytes, normalize_loudness
+from ova.config import svc_event
+from ova.engines.base import EngineError, Reply
+
+LOG = logging.getLogger("dialogue.e2e")
+
+DEFAULT_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+DEFAULT_MODEL = "glm-4-voice"
+DEFAULT_API_KEY_ENV = "ZHIPUAI_API_KEY"
+DEFAULT_PCM_RATE = 24000          # measured: 44100 makes playback 1.84x too fast
+                                  # (the 44100 in the official sample is wrong —
+                                  #  see docs/glm-voice-poc-2026-09-10.md §6.2)
+DEFAULT_TARGET_RMS = 0.09         # match the qwen3-tts reply level (~0.086 RMS)
+DEFAULT_TIMEOUT_S = 10.0          # measure: p50 1.4 s; a 7 s stall was seen once
+PRICE_CNY_PER_MTOKENS = 80.0      # 智谱 GLM-4-Voice 原价（元/百万 tokens）
+
+DEFAULT_PERSONA = (
+    "你是展厅导览机器人。回答必须极简：只说一句话，不超过10个字。"
+    "禁止重复用户的话，禁止罗列，禁止列表/表情/markdown。语言跟随用户。"
+)
+# Measured 2026-09-10 (docs/glm-voice-poc-2026-09-10.md):
+#  * a "40 字以内" persona produced 5-11 s of audio; "不超过10个字" lands at
+#    ~3.5-4 s for greetings (longer questions still overshoot — GLM-4-Voice has
+#    no hard length control);
+#  * mentioning English (e.g. "英文不超过12个单词") makes the model answer in
+#    English *even to Chinese input*, so the language rule says "语言跟随用户".
+
+
+class GlmVoiceEngine:
+    """End-to-end speech-to-speech engine (no local ASR in the path)."""
+
+    name = "e2e"
+    needs_transcript = False
+
+    def __init__(self, cfg: dict | None = None):
+        cfg = cfg or {}
+        self.url = str(cfg.get("glm_voice_url")
+                       or os.getenv("GLM_VOICE_URL", DEFAULT_URL))
+        self.model = str(cfg.get("glm_voice_model")
+                         or os.getenv("GLM_VOICE_MODEL", DEFAULT_MODEL))
+        self.persona = str(cfg.get("glm_voice_persona")
+                           or os.getenv("GLM_VOICE_PERSONA", DEFAULT_PERSONA))
+        self.api_key_env = str(cfg.get("glm_voice_api_key_env")
+                               or os.getenv("GLM_VOICE_API_KEY_ENV", DEFAULT_API_KEY_ENV))
+        self.timeout_s = float(cfg.get("glm_voice_timeout_s")
+                               or os.getenv("GLM_VOICE_TIMEOUT_S", DEFAULT_TIMEOUT_S))
+        self.pcm_rate = int(cfg.get("glm_voice_pcm_rate")
+                            or os.getenv("GLM_VOICE_PCM_RATE", DEFAULT_PCM_RATE))
+        self.playback_timeout_s = float(cfg.get("e2e_playback_timeout_s")
+                                        or os.getenv("E2E_PLAYBACK_TIMEOUT_S", 180.0))
+        self.target_rms = float(cfg.get("glm_voice_target_rms")
+                                or os.getenv("GLM_VOICE_TARGET_RMS", DEFAULT_TARGET_RMS))
+        # Warm the resampler at startup: the first scipy import inside
+        # device_wav_bytes() cost ~1.9 s on the CM4 (measured 2026-09-10),
+        # which would otherwise land on the first dialogue round.
+        try:
+            device_wav_bytes(np.zeros(64, dtype=np.int16), self.pcm_rate)
+        except Exception as exc:  # noqa: BLE001 - warm-up must never be fatal
+            LOG.warning("E2E_WARMUP_FAILED %s: %s", type(exc).__name__, exc)
+        LOG.info("E2E_READY engine=glm-4-voice model=%s url=%s timeout=%.0fs pcm_rate=%d",
+                 self.model, self.url, self.timeout_s, self.pcm_rate)
+
+    # -- request ---------------------------------------------------------
+    def _payload(self, wav_b64: str, prompt: str) -> dict:
+        return {
+            "model": self.model,
+            "stream": False,
+            "messages": [{
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": prompt},
+                    {"type": "input_audio",
+                     "input_audio": {"data": wav_b64, "format": "wav"}},
+                ],
+            }],
+        }
+
+    def _post(self, payload: dict) -> dict:
+        key = os.environ.get(self.api_key_env, "")
+        if not key:
+            raise EngineError(f"{self.api_key_env} is not set")
+        req = urllib.request.Request(
+            self.url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={"Authorization": "Bearer " + key,
+                     "Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=self.timeout_s) as resp:
+                return json.load(resp)
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8", "replace")[:300]
+            raise EngineError(f"HTTP {exc.code}: {body}") from exc
+        except (urllib.error.URLError, TimeoutError, socket.timeout) as exc:
+            reason = getattr(exc, "reason", exc)
+            if isinstance(exc, (TimeoutError, socket.timeout)):
+                raise EngineError(
+                    f"timeout after {self.timeout_s:.0f}s (no reply from {self.model})"
+                ) from exc
+            raise EngineError(f"network error: {reason}") from exc
+        except json.JSONDecodeError as exc:
+            raise EngineError(f"bad json from {self.model}: {exc}") from exc
+
+    # -- response parsing -------------------------------------------------
+    @staticmethod
+    def _message(data: dict) -> dict:
+        try:
+            return data["choices"][0]["message"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise EngineError(f"unexpected response: {str(data)[:200]}") from exc
+
+    def _decode_pcm(self, message: dict) -> bytes:
+        audio = message.get("audio") or {}
+        raw_b64 = audio.get("data") if isinstance(audio, dict) else None
+        if not raw_b64:
+            raise EngineError("response has no audio payload")
+        try:
+            pcm = base64.b64decode(raw_b64, validate=True)
+        except (binascii.Error, ValueError) as exc:
+            raise EngineError(f"audio payload is not valid base64: {exc}") from exc
+        if not pcm:
+            raise EngineError("audio payload is empty")
+        return pcm
+
+    @staticmethod
+    def _guess_lang(text: str) -> str:
+        for ch in text:
+            if "\u4e00" <= ch <= "\u9fff":
+                return "zh"
+            if ch.isascii() and ch.isalpha():
+                return "en"
+        return ""
+
+    # -- Engine interface -------------------------------------------------
+    def respond(self, samples, text: str = "", cfg: dict | None = None) -> Reply:
+        cfg = cfg or {}
+        t0 = time.monotonic()
+
+        wav = mono16k_wav_bytes(samples)
+        wav_b64 = base64.b64encode(wav).decode("ascii")
+        prompt = str(cfg.get("glm_voice_persona") or self.persona)
+        if text:
+            # Only reached if a caller already has a transcript (console tests).
+            prompt = f"{prompt}\n用户刚才说：{text}"
+        encode_s = time.monotonic() - t0
+
+        t1 = time.monotonic()
+        data = self._post(self._payload(wav_b64, prompt))
+        request_s = time.monotonic() - t1
+
+        message = self._message(data)
+        reply_text = (message.get("content") or "").strip()
+        pcm = self._decode_pcm(message)
+
+        t2 = time.monotonic()
+        mono = np.frombuffer(pcm, dtype="<i2")
+        level_before = float(np.sqrt(np.mean((mono.astype(np.float32) / 32768.0) ** 2)))
+        mono_norm, gain = normalize_loudness(mono, self.target_rms,
+                                             rate=self.pcm_rate)
+        LOG.info("E2E_LEVEL rms_in=%.4f gain=%.2f rms_out=%.4f",
+                 level_before, gain,
+                 float(np.sqrt(np.mean((mono_norm.astype(np.float32) / 32768.0) ** 2))))
+        device_wav = device_wav_bytes(mono_norm, self.pcm_rate)
+        tmp = Path(f"/tmp/hjw_e2e_{os.getpid()}_{int(time.time() * 1000)}.wav")
+        tmp.write_bytes(device_wav)
+        convert_s = time.monotonic() - t2
+
+        audio_s = len(mono) / float(self.pcm_rate or 1)
+        usage = data.get("usage") or {}
+        tokens = usage.get("total_tokens")
+        cost = round(float(tokens) * PRICE_CNY_PER_MTOKENS / 1e6, 5) if tokens else None
+        elapsed = time.monotonic() - t0
+        lang = self._guess_lang(reply_text)
+
+        LOG.info("E2E_REPLY text=%s", reply_text[:80] or "(empty)")
+        LOG.info("E2E_LATENCY encode=%.2fs request=%.2fs convert=%.2fs total=%.2fs "
+                 "audio=%.2fs", encode_s, request_s, convert_s, elapsed, audio_s)
+        if tokens:
+            LOG.info("E2E_USAGE prompt=%s completion=%s total=%s cost=¥%s",
+                     usage.get("prompt_tokens"), usage.get("completion_tokens"),
+                     tokens, cost)
+        svc_event("e2e", f"端到端回复({audio_s:.1f}s音频, {elapsed:.1f}s): {reply_text[:80]}",
+                  "ok", text=reply_text[:200], lang=lang,
+                  request_s=round(request_s, 2), audio_s=round(audio_s, 2))
+        if cost is not None:
+            svc_event("e2e", f"用量 {tokens} tokens ≈ ¥{cost}", "info",
+                      tokens=tokens, cost=cost)
+
+        return Reply(
+            audio_path=tmp,
+            text=reply_text,
+            transcript="",
+            lang=lang,
+            timeout_s=self.playback_timeout_s,
+            temporary=True,
+            meta={
+                "engine": self.name,
+                "provider": "glm-4-voice",
+                "encode_s": round(encode_s, 2),
+                "request_s": round(request_s, 2),
+                "convert_s": round(convert_s, 3),
+                "gain": round(gain, 2),
+                "elapsed_s": round(elapsed, 2),
+                "audio_s": round(audio_s, 2),
+                "tokens": tokens,
+                "cost_cny": cost,
+            },
+        )
+
+
+def respond_file(wav_path: str | Path, cfg: dict | None = None,
+                 persona: str | None = None) -> Reply:
+    """Offline helper for scripts/PoC: a 16 kHz WAV file in, a Reply out.
+
+    ``reply.meta`` carries the latency breakdown, token usage and cost;
+    ``reply.audio_path`` is a playable 16 kHz stereo WAV. Raises EngineError
+    (cloud/format/timeout) on failure.
+    """
+    import wave
+
+    engine = GlmVoiceEngine(cfg)
+    with wave.open(str(wav_path)) as w:
+        if w.getsampwidth() != 2:
+            raise CloudError(f"{wav_path}: only 16-bit PCM is supported")
+        if w.getframerate() != 16000:
+            raise CloudError(f"{wav_path}: expected 16 kHz, got {w.getframerate()}")
+        samples = np.frombuffer(w.readframes(w.getnframes()), dtype="<i2")
+        if w.getnchannels() > 1:
+            samples = samples.reshape(-1, w.getnchannels())
+    local_cfg = dict(cfg or {})
+    if persona:
+        local_cfg["glm_voice_persona"] = persona
+    return engine.respond(samples, "", local_cfg)

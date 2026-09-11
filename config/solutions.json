@@ -1,0 +1,37 @@
+{
+  "solutions": [
+    {
+      "id": "smart_retail",
+      "name_zh": "智慧零售",
+      "name_en": "Smart Retail",
+      "aliases_zh": ["智慧零售", "智能零售", "零售区"],
+      "aliases_en": ["smart retail", "retail area", "retail zone"],
+      "audio_zh": "assets/solutions/smart_retail_zh.wav",
+      "audio_en": "assets/solutions/smart_retail_en.wav",
+      "text_zh": "欢迎来到智慧零售区。你眼前的 AI 摄像头不只负责录像——它用视觉模型实时识别人流，生成热力图，还会盯着货架自动盘点商品；旁边这位 Watcher 是仓管智能体，你可以直接开口问库存，也能用它完成入库和出库。再配合 reTerminal DM 智能零售终端，点一下屏幕就能看到客流和库存变化。\n这套看人、看货、管库存的能力并不只限于门店——同样可以迁移到便利店、连锁商超、仓库等任何需要客流分析和物品盘点的空间。",
+      "text_en": "Welcome to the Smart Retail area. The AI camera in front of you does more than record video—it uses vision models to track store traffic in real time, generate heatmaps, and watch the shelves for automatic inventory counting. This is Watcher, our voice-enabled warehouse agent: you can ask it about stock levels or use it to handle check-in and check-out. Paired with the reTerminal DM smart retail terminal, one tap gives you a live view of foot traffic and inventory. By connecting people counting, product recognition, and stock management, the store moves from ‘checking recordings afterward’ to ‘getting answers on the spot.’ And this isn’t limited to retail—the same approach works just as well in convenience stores, chain supermarkets, and warehouses."
+    },
+    {
+      "id": "smart_space",
+      "name_zh": "智慧空间",
+      "name_en": "Smart Space",
+      "aliases_zh": ["智慧空间", "空间区"],
+      "aliases_en": ["smart space", "space zone", "smart space zone"],
+      "audio_zh": "assets/solutions/smart_space_zh.wav",
+      "audio_en": "assets/solutions/smart_space_en.wav",
+      "text_zh": "智慧空间区，是主动照护和智慧家居的呈现。核心是这台 reCamera Pro：它通过 AI 视觉模型识别跌倒等异常行为，一发现情况就触发语音询问，并把现场信息同步给家人或护工；旁边的家居控制智能体，靠开放协议可以把不同品牌的灯和面板接进来；reTerminal E1003 则像一块真实的家庭墙控，点击就能调亮度、切场景。\n同样的思路，可以迁移到社区、养老机构、酒店客房、办公室、公寓和学校等任何需要主动看护与联动控制的空间。",
+      "text_en": "Now we’re in the Smart Space zone, focused on proactive care and smart home automation. At the center is this reCamera Pro: it uses an AI vision model to detect unusual situations like a fall, then immediately triggers a voice check and shares the live context with family members or caregivers. Beside it is a home automation agent built around Home Assistant—its open integrations let lights and panels from different brands work together in one system. Over here, the reTerminal E1003 functions as a wall-mounted home control panel: tap it to adjust brightness or switch scenes. So this isn’t only about one smart device; it’s a care chain—detect, ask, notify, respond. The same approach transfers to communities, senior-care facilities, hotel rooms, offices, apartments, and schools."
+    },
+    {
+      "id": "emergency_response",
+      "name_zh": "应急救灾",
+      "name_en": "Emergency Response",
+      "aliases_zh": ["应急救灾", "应急救援", "救灾区", "应急区"],
+      "aliases_en": ["emergency response", "disaster relief", "emergency rescue", "emergency zone"],
+      "audio_zh": "assets/solutions/emergency_response_zh.wav",
+      "audio_en": "assets/solutions/emergency_response_en.wav",
+      "text_zh": "应急救灾区，这一站看的是户外环境。真正难的不是缺传感器，而是现场没有网络，也无人值守。气象站和多种环境传感器自主采集温湿度、土壤、水位等数据，通过 LoRa 在无网环境下长距离回传，数值一旦出现异常就主动告警。\n这套无网感知能力可以迁移到农田、山地、河流、工地、矿区和园区边界等任何网络条件差、又需要远程监测的区域。",
+      "text_en": "Here in the Emergency Response zone, the focus is the outdoor environment. The real challenge isn’t missing sensors—it’s that these sites often have no network and no one on duty. The weather station and environmental sensors collect temperature, humidity, soil, and water-level data on their own, transmitting it over LoRa even without coverage. When a reading crosses the threshold, the system raises an alert automatically. This off-grid sensing capability can be applied anywhere with poor connectivity and remote-monitoring needs—farmland, mountains, rivers, construction sites, mines, and campus perimeters."
+    }
+  ]
+}

@@ -13,6 +13,7 @@ Endpoints:
   POST /api/wake/start|stop live wake-score monitor
   POST /api/vad/record      record N seconds, replay raw audio
   POST /api/asr/dictate     one utterance -> text (auto VAD)
+  POST /api/e2e/dictate     one utterance -> end-to-end model -> audio reply
   POST /api/asr/continuous  keep dictating segments until stopped
   POST /api/llm             text -> full request/reply/tool trace
   POST /api/tts             text -> synthesize + play on the robot
@@ -27,6 +28,7 @@ import argparse
 import io
 import json
 import logging
+import os
 import queue
 import tempfile
 import threading
@@ -42,7 +44,7 @@ AUDIO_DIR = Path(tempfile.gettempdir()) / "hjw_console"
 AUDIO_DIR.mkdir(exist_ok=True)
 
 from ova.wake import (
-    AlsaBackend, DEFAULTS, capture_utterance, load_model,
+    AlsaBackend, DEFAULTS, ENV_MAP, _to_type, capture_utterance, load_model,
     mono, score_frame,
 )
 from ova.asr import LocalAsr
@@ -51,6 +53,11 @@ from ova.tools import WEATHER_TOOL, load_tool_calls, query_weather
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 LOG = logging.getLogger("console")
+
+CFG = dict(DEFAULTS)
+for _key, _env in ENV_MAP.items():
+    if _env in os.environ:
+        CFG[_key] = _to_type(_key, os.environ[_env])
 
 # ---------------------------------------------------------------- events
 
@@ -104,7 +111,7 @@ def get_backend() -> AlsaBackend:
     global backend
     with backend_lock:
         if backend is None:
-            backend = AlsaBackend(DEFAULTS)
+            backend = AlsaBackend(CFG)
         return backend
 
 
@@ -148,7 +155,8 @@ ACTIVE_LOCK = threading.Lock()
 
 
 TIMEOUTS = {"llm": 45.0, "tts": 120.0, "full": 300.0,
-            "asr": 60.0, "asr_cont": None, "vad": 20.0, "wake": None}
+            "asr": 60.0, "asr_cont": None, "vad": 20.0, "wake": None,
+            "e2e": 300.0}
 
 
 def launch(name: str, fn, *args) -> bool:
@@ -195,7 +203,7 @@ def wake_model():
     global WAKE_MODEL
     with WAKE_MODEL_LOCK:
         if WAKE_MODEL is None:
-            WAKE_MODEL = load_model(Path(DEFAULTS["model_dir"]))
+            WAKE_MODEL = load_model(Path(CFG["model_dir"]))
             BUS.emit("wake", "info", f"模型加载完成 {next(iter(WAKE_MODEL.models))}")
         return WAKE_MODEL
 
@@ -209,14 +217,14 @@ def wake_monitor():
     with Capture(backend) as cap:
         warmup_end = time.monotonic() + 0.4
         while not ACTIVE.get("wake").stopped():
-            samples = mono(cap.read(), DEFAULTS["channel"])
+            samples = mono(cap.read(), CFG["channel"])
             if time.monotonic() < warmup_end:
                 continue
             score = score_frame(model, samples)
-            hits = hits + 1 if score >= DEFAULTS["threshold"] else 0
+            hits = hits + 1 if score >= CFG["threshold"] else 0
             BUS.emit("wake", "score", "score", score=round(score, 4),
-                     hits=hits, threshold=DEFAULTS["threshold"])
-            if hits >= DEFAULTS["hits"]:
+                     hits=hits, threshold=CFG["threshold"])
+            if hits >= CFG["hits"]:
                 BUS.emit("wake", "wake", f"唤醒命中! score={score:.3f}")
                 hits = 0
     BUS.emit("wake", "info", "监测已停止")
@@ -259,8 +267,7 @@ def get_asr() -> LocalAsr:
     global ASR
     with ASR_LOCK:
         if ASR is None:
-            import os
-            model_dir = os.getenv("WAKE_ASR_MODEL_DIR") or DEFAULTS["asr_model_dir"]
+            model_dir = os.getenv("WAKE_ASR_MODEL_DIR") or CFG["asr_model_dir"]
             ASR = LocalAsr(Path(model_dir))
         return ASR
 
@@ -270,13 +277,17 @@ def _capture_segment(bus_emit, max_s=15.0, end_silence_s=2.0,
     """One utterance via the shared echo-safe VAD (wake_service)."""
     return capture_utterance(
         get_backend(),
-        channel=DEFAULTS["channel"],
+        channel=CFG["channel"],
         end_silence_s=end_silence_s,
         max_s=max_s,
         min_speech_s=min_speech_s,
         delay_s=0.3,
         on_level=lambda rms: bus_emit("vad", "level", "level", rms=round(rms, 1)),
         stop_check=stop_evt,
+        vad_backend=CFG.get("vad_backend", "energy"),
+        vad_model_path=CFG.get("vad_model_path", "models/silero_vad.onnx"),
+        vad_threshold=CFG.get("vad_threshold", 0.50),
+        vad_buffer_s=CFG.get("vad_buffer_s", 30.0),
     )
 
 
@@ -396,6 +407,64 @@ def save_audio_bytes(wav: bytes, tag: str) -> str:
     return fname
 
 
+# --- end-to-end engine (GLM-4-Voice) -----------------------------------
+
+E2E_ENGINE = None
+E2E_LOCK = threading.Lock()
+
+
+def get_e2e_engine():
+    """Build the end-to-end engine once (config keys come from env/JSON)."""
+    global E2E_ENGINE
+    with E2E_LOCK:
+        if E2E_ENGINE is None:
+            from ova.engines.glm_voice import GlmVoiceEngine
+            import os as _os
+            cfg = {}
+            for key, env in (("glm_voice_model", "WAKE_GLM_VOICE_MODEL"),
+                             ("glm_voice_persona", "WAKE_GLM_VOICE_PERSONA"),
+                             ("glm_voice_timeout_s", "WAKE_GLM_VOICE_TIMEOUT_S"),
+                             ("glm_voice_pcm_rate", "WAKE_GLM_VOICE_PCM_RATE")):
+                value = _os.getenv(env)
+                if value:
+                    cfg[key] = value
+            E2E_ENGINE = GlmVoiceEngine(cfg)
+        return E2E_ENGINE
+
+
+def e2e_test(play: bool = True):
+    """Card ⑥: record one utterance and let the end-to-end model answer."""
+    from ova.engines.base import EngineError
+    engine = get_e2e_engine()
+    BUS.emit("e2e", "info", f"请说一句话（端到端 · {engine.model}，说完停顿约2秒）…")
+    got = _capture_segment(BUS.emit)
+    if got is None:
+        BUS.emit("e2e", "warn", "没有检测到语音")
+        return
+    samples = got
+    fname = save_audio(np.repeat(samples, 2), "e2e_in")
+    BUS.emit("e2e", "info", "已发送给端到端模型…", audio=fname)
+    t0 = time.monotonic()
+    try:
+        reply = engine.respond(samples, "", {})
+    except EngineError as exc:
+        BUS.emit("e2e", "error", f"端到端失败: {exc}")
+        return
+    wall = time.monotonic() - t0
+    out = save_audio_bytes(reply.audio_path.read_bytes(), "e2e_out")
+    reply.audio_path.unlink(missing_ok=True)
+    meta = dict(reply.meta)
+    meta["wall_s"] = round(wall, 2)
+    BUS.emit("e2e", "ok",
+             f"回复({meta.get('audio_s')}s音频): {reply.text[:60]}",
+             text=reply.text, audio=out, meta=meta)
+    if play:
+        backend = get_backend()
+        backend.play_file(AUDIO_DIR / out, timeout=180)
+        BUS.emit("e2e", "ok", f"播放完成 (墙钟 {wall:.1f}s)")
+    return out
+
+
 # --- full pipeline -----------------------------------------------------
 
 def full_test():
@@ -465,7 +534,7 @@ background:#0f172a;border-radius:8px;padding:8px}
   <div class=row><button id=wStart>开始监测</button><button id=wStop class=ghost disabled>停止</button></div>
   <div class=big id=wScore>--</div><div id=wHits></div><div class=spark id=wSpark></div>
   <div class=log id=wLog></div></div>
-  <div class=card><h3>② 拾音 + ASR 听写 <span class=tag>本地 · VAD + Paraformer-zh</span></h3>
+  <div class=card><h3>② 拾音 + ASR 听写 <span class=tag>本地 · VAD + 中英双语</span></h3>
    <p>点击按钮后直接说话，停顿约2秒自动转文字（原始录音可回放）。按钮会循环：蓝(待命)→红(聆听)→识别→恢复蓝色。</p>
    <button id=micBtn style="width:100%;padding:14px;font-size:16px;background:#0ea5e9">
    🎤 点我开始（相当于喊“Hey Jarvis”）</button>
@@ -486,6 +555,15 @@ background:#0f172a;border-radius:8px;padding:8px}
   <textarea id=tIn placeholder="例如：杭州今天小雨，气温23度，出门记得带伞哦。"></textarea>
   <div class=row><button id=tSend>合成并播放</button><button id=tOnly class=ghost>仅合成</button></div>
   <audio id=tAudio controls style=display:none></audio><div class=log id=tLog></div></div>
+ <div class=card><h3>⑥ 端到端（GLM-4-Voice） <span class=tag>在线 · 录音直进 / 音频直出</span></h3>
+  <p>录音后<b>不走本地 ASR</b>，把音频直接发给端到端模型，返回音频让机器人播放；显示延迟分解与用量成本。</p>
+  <button id=eBtn style="width:100%;padding:14px;font-size:16px;background:#7c3aed">
+  🎙 点我说一句（端到端）</button>
+  <p style="font-size:12px;color:var(--mut)">需设 ZHIPUAI_API_KEY；首次请求较慢属正常，返回音频在此回放</p>
+  <div class=big id=eText style="color:#a78bfa">（端到端回复文本）</div>
+  <pre id=eMeta>（延迟/用量将显示在这里）</pre>
+  <audio id=eAudio controls style=display:none></audio>
+  <div class=log id=eLog></div></div>
 </div>
 <div class=card style=margin-top:12px><h3>⏱ 全链路时间线 <span class=tag>唤醒后直接说话即可测（本页不含唤醒词）</span></h3>
  <div class=row><button id=fRun>▶ 全链路测试（说完话自动执行）</button><button id=fStop class=ghost>停止录音</button></div>
@@ -513,7 +591,7 @@ function setBusy(name,on){const m={w:$('wStart'),v:$('vRecord'),a:$('aOnce'),a2:
 $('wStart').onclick=async()=>{setBusy('w',true);$('wStop').disabled=false;
  log($('wLog'),'监测中…');await go('/api/wake/start');};
 $('wStop').onclick=async()=>{$('wStop').disabled=true;await go('/api/wake/stop');};
-const MB=$('micBtn');let micBusy=false;
+const MB=$('micBtn');let micBusy=false;let eBusy=false;
 function micSet(st){micBusy=st!=='idle';MB.disabled=false;
  if(st==='listen'){MB.style.background='#ef4444';MB.textContent='🔴 聆听中…请说话（停2秒自动识别，再点取消）';}
  else if(st==='work'){MB.style.background='#f59e0b';MB.textContent='⏳ 识别中…';}
@@ -527,6 +605,9 @@ $('tSend').onclick=async()=>{const t=$('tIn').value.trim();if(!t)return;setBusy(
 $('tOnly').onclick=async()=>{const t=$('tIn').value.trim();if(!t)return;setBusy('t',true);
  await go('/api/tts',{text:t,play:false});setBusy('t',false);};
 $('fRun').onclick=async()=>{setBusy('f',true);$('fStop').disabled=false;await go('/api/full');setBusy('f',false);};
+$('eBtn').onclick=async()=>{if(eBusy){await go('/api/stop');eBusy=false;$('eBtn').textContent='🎙 点我说一句（端到端）';return;}
+ eBusy=true;$('eBtn').textContent='✋ 聆听中…（再点一次取消）';$('eText').textContent='（等待回复）';
+ try{await go('/api/e2e/dictate');}finally{eBusy=false;$('eBtn').textContent='🎙 点我说一句（端到端）';}};
 $('fStop').onclick=async()=>{$('fStop').disabled=true;await go('/api/stop');};
 // sse
 const es=new EventSource('/api/events');
@@ -539,7 +620,7 @@ es.onmessage=e=>{const d=JSON.parse(e.data);const t=`${d.t} [${d.card}] ${d.msg}
  line.innerHTML=`<b>[${d.card}]</b> ${d.msg}`;
  tl.prepend(line);
  // route per card
- const logEl={wake:$('wLog'),asr:$('aLog'),llm:$('lLog'),tts:$('tLog')}[d.card];
+ const logEl={wake:$('wLog'),asr:$('aLog'),llm:$('lLog'),tts:$('tLog'),e2e:$('eLog')}[d.card];
  if(logEl&&d.level!=='level'&&d.level!=='raw')log(logEl,d.msg);
  if(d.card==='wake'&&d.level==='score'){$('wScore').textContent=d.score.toFixed(3);
    $('wHits').textContent=`连续 ${d.hits}/${d.threshold}`;pushSpark(d.score);}
@@ -549,13 +630,16 @@ es.onmessage=e=>{const d=JSON.parse(e.data);const t=`${d.t} [${d.card}] ${d.msg}
  if(d.card==='asr'&&d.level==='ok'&&d.text){$('aText').textContent=d.text;micSet('idle');}
  if(d.card==='asr'&&d.level==='warn')micSet('idle');
  if(d.card==='asr'&&d.level==='info'&&d.msg.indexOf('请说一句话')>=0)micSet('listen');
+ if(d.card==='e2e'){micSet('idle');if(d.level==='ok'&&d.text)$('eText').textContent=d.text;
+   if(d.meta)$('eMeta').textContent=fmt(d.meta);if(d.level==='error')$('eMeta').textContent=d.msg;}
  if(d.card==='system'&&d.level==='error'&&micBusy)micSet('idle');
- if(d.audio){const el=(d.card==='asr'||d.card==='vad')?$('vAudio'):d.card==='tts'?$('tAudio'):null;if(el){el.style.display='block';audioOf(el,d.audio);}}
+ if(d.audio){const el=(d.card==='asr'||d.card==='vad')?$('vAudio'):d.card==='tts'?$('tAudio'):d.card==='e2e'?$('eAudio'):null;if(el){el.style.display='block';audioOf(el,d.audio);}}
  if(d.card==='llm'&&d.level==='ok'&&d.text)$('lRaw').textContent=d.text;};
 es.onerror=()=>{};
 $('ver').textContent='v3';fetch('/api/status').then(r=>r.json()).then(s=>{$('st').innerHTML=
  `<span class=tag>${s.chat_model}</span> <span class=tag>${s.tts_model}/${s.tts_voice}</span>
- <span class=tag>wake ${s.threshold}/${s.hits}帧</span> <span class=tag>dialogue=${s.dialogue}</span>`});
+ <span class=tag>wake ${s.threshold}/${s.hits}帧</span> <span class=tag>vad=${s.vad}</span>
+ <span class=tag>asr=${(s.asr||'').split('/').pop()}</span> <span class=tag>dialogue=${s.dialogue}</span>`});
 </script></body></html>"""
 
 
@@ -599,8 +683,10 @@ class Handler(BaseHTTPRequestHandler):
                 "chat_model": llm.CHAT_MODEL,
                 "tts_model": tts.TTS_MODEL,
                 "tts_voice": tts.TTS_VOICE,
-                "threshold": DEFAULTS["threshold"],
-                "hits": DEFAULTS["hits"],
+                "threshold": CFG["threshold"],
+                "hits": CFG["hits"],
+                "vad": CFG.get("vad_backend", "energy"),
+                "asr": CFG.get("asr_model_dir", ""),
                 "dialogue": os_dialogue(),
             })
             return
@@ -648,6 +734,8 @@ class Handler(BaseHTTPRequestHandler):
                 self._json(200, {"started": launch("vad", record_seconds, 8.0)})
             elif path == "/api/asr/dictate":
                 self._json(200, {"started": launch("asr", asr_dictate)})
+            elif path == "/api/e2e/dictate":
+                self._json(200, {"started": launch("e2e", e2e_test)})
             elif path == "/api/asr/continuous":
                 self._json(200, {"started": launch("asr_cont", asr_continuous)})
             elif path == "/api/llm":

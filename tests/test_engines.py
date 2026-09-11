@@ -1,0 +1,217 @@
+#!/usr/bin/env python3
+"""Engine abstraction tests — no network, no audio device, no wake model.
+
+Run with pytest or directly:
+
+    python3 tests/test_engines.py
+"""
+
+from __future__ import annotations
+
+import contextlib
+import os
+import sys
+import wave
+from pathlib import Path
+
+import numpy as np
+
+ROOT = Path(__file__).resolve().parents[1]
+SRC = ROOT / "src"
+if str(SRC) not in sys.path:      # allow running without `pip install -e .`
+    sys.path.insert(0, str(SRC))
+
+os.environ.setdefault("OVA_HOME", str(ROOT))
+
+from ova.engines import EngineError, build_engine          # noqa: E402
+from ova.engines import pipeline as pipe                   # noqa: E402
+from ova.engines.base import ENGINE_ALIASES                # noqa: E402
+from ova.llm import CloudError                             # noqa: E402
+
+
+@contextlib.contextmanager
+def patch(obj, **attrs):
+    """Temporarily replace module attributes (keeps the real ones intact)."""
+    saved = {k: getattr(obj, k) for k in attrs}
+    for k, v in attrs.items():
+        setattr(obj, k, v)
+    try:
+        yield
+    finally:
+        for k, v in saved.items():
+            setattr(obj, k, v)
+
+
+def _fake_wav_bytes() -> bytes:
+    """A tiny valid 16 kHz stereo WAV, standing in for qwen3-tts output."""
+    import io
+
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(2)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(np.zeros(1600, dtype="<i2").tobytes())
+    return buf.getvalue()
+
+
+# --- factory -----------------------------------------------------------------
+
+def test_default_engine_is_pipeline():
+    engine = build_engine({}, asr=object())
+    assert engine.name == "pipeline"
+    assert engine.needs_transcript is True
+
+
+def test_engine_aliases_are_accepted():
+    assert ENGINE_ALIASES["e2e"] == "e2e"
+    assert ENGINE_ALIASES["glm-4-voice"] == "e2e"
+    assert ENGINE_ALIASES["端到端"] == "e2e"
+    assert ENGINE_ALIASES["pipeline"] == "pipeline"
+    assert ENGINE_ALIASES["半在线"] == "pipeline"
+
+
+def test_unknown_engine_raises_with_hint():
+    try:
+        build_engine({"engine": "gpt4o-realtime"})
+    except EngineError as exc:
+        assert "pipeline" in str(exc) and "e2e" in str(exc)
+    else:  # pragma: no cover - defensive
+        raise AssertionError("expected EngineError for an unknown engine")
+
+
+def test_case_and_whitespace_tolerated():
+    engine = build_engine({"engine": "  Pipeline  "}, asr=object())
+    assert engine.name == "pipeline"
+
+
+# --- pipeline helpers --------------------------------------------------------
+
+def test_clip_passes_short_text_through():
+    assert pipe.clip("你好呀") == "你好呀"
+
+
+def test_clip_cuts_at_sentence_boundary():
+    text = "第一句话在这里。" + "第二句话很长很长很长" * 12
+    out = pipe.clip(text, maxlen=40)
+    assert len(out) <= 41
+    assert out.endswith("。")
+
+
+def test_ask_with_weather_plain_reply():
+    with patch(pipe, chat_once=lambda messages, tools=None, timeout=30.0: {
+            "content": "杭州今天小雨。"}):
+        assert pipe.ask_with_weather("杭州天气") == "杭州今天小雨。"
+
+
+def test_ask_with_weather_runs_tool_round():
+    calls = []
+
+    def fake_chat(messages, tools=None, timeout=30.0):
+        calls.append(messages)
+        if len(calls) == 1:
+            return {"content": "", "tool_calls": [{
+                "id": "call_1",
+                "function": {"name": "query_weather",
+                             "arguments": '{"city_slug": "Hangzhou"}'}}]}
+        return {"content": "杭州 23 度，小雨。"}
+
+    with patch(pipe, chat_once=fake_chat, query_weather=lambda slug: f"{slug}: 小雨 23C"):
+        reply = pipe.ask_with_weather("杭州天气怎么样")
+    assert reply == "杭州 23 度，小雨。"
+    assert len(calls) == 2
+    assert calls[1][-1]["role"] == "tool"
+    assert "小雨" in calls[1][-1]["content"]
+
+
+def test_ask_with_weather_empty_reply_raises():
+    with patch(pipe, chat_once=lambda messages, tools=None, timeout=30.0: {"content": "  "}):
+        try:
+            pipe.ask_with_weather("随便说点什么")
+        except CloudError:
+            pass
+        else:  # pragma: no cover - defensive
+            raise AssertionError("expected CloudError on empty reply")
+
+
+# --- pipeline respond --------------------------------------------------------
+
+def test_respond_returns_playable_reply(tmp_path):
+    engine = build_engine({"engine": "pipeline"}, asr=object())
+    with patch(pipe,
+               ask_with_weather=lambda text: "欢迎来到智慧零售区。",
+               synthesize=lambda text, timeout=60.0: _fake_wav_bytes()):
+        reply = engine.respond(np.zeros(16000, dtype=np.int16), "介绍智慧零售")
+
+    assert reply.text == "欢迎来到智慧零售区。"
+    assert reply.transcript == "介绍智慧零售"
+    assert reply.temporary is True          # playback loop deletes it afterwards
+    assert reply.timeout_s == 90.0
+    assert reply.meta["engine"] == "pipeline"
+    assert reply.meta["provider"] == "qwen"
+    assert reply.audio_path.is_file()
+    with wave.open(str(reply.audio_path)) as w:
+        assert w.getframerate() == 16000 and w.getnchannels() == 2
+    reply.audio_path.unlink()
+
+
+def test_respond_maps_chat_failure_to_engine_error():
+    engine = build_engine({"engine": "pipeline"}, asr=object())
+
+    def boom(text):
+        raise CloudError("HTTP 429: rate limited")
+
+    with patch(pipe, ask_with_weather=boom):
+        try:
+            engine.respond(np.zeros(1600, dtype=np.int16), "你好")
+        except EngineError as exc:
+            assert "chat failed" in str(exc) and "429" in str(exc)
+        else:  # pragma: no cover - defensive
+            raise AssertionError("expected EngineError")
+
+
+def test_respond_maps_tts_failure_to_engine_error():
+    engine = build_engine({"engine": "pipeline"}, asr=object())
+
+    def boom(text, timeout=60.0):
+        raise CloudError("tts audio download failed")
+
+    with patch(pipe,
+               ask_with_weather=lambda text: "好的。",
+               synthesize=boom):
+        try:
+            engine.respond(np.zeros(1600, dtype=np.int16), "你好")
+        except EngineError as exc:
+            assert "tts failed" in str(exc)
+        else:  # pragma: no cover - defensive
+            raise AssertionError("expected EngineError")
+
+
+# --- direct runner (no pytest required) -------------------------------------
+
+def _main() -> int:
+    import traceback
+
+    tests = [v for k, v in sorted(globals().items())
+             if k.startswith("test_") and callable(v)]
+    failed = 0
+    for test in tests:
+        kwargs = {}
+        if "tmp_path" in test.__code__.co_varnames[: test.__code__.co_argcount]:
+            import tempfile
+            ctx = tempfile.TemporaryDirectory()
+            kwargs["tmp_path"] = Path(ctx.name)
+        try:
+            test(**kwargs)
+        except Exception:  # noqa: BLE001 - report and keep going
+            failed += 1
+            print(f"FAIL: {test.__name__}")
+            traceback.print_exc()
+        else:
+            print(f"PASS: {test.__name__}")
+    print(f"\n{'FAILED' if failed else 'OK'}: {len(tests) - failed}/{len(tests)} passed")
+    return 1 if failed else 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main())

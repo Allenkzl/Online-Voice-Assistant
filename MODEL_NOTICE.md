@@ -13,13 +13,37 @@ setup time by `scripts/download_models.sh` and verified with checksums.
   https://github.com/dscripka/openWakeWord#license
 - ⚠️ Confirm the upstream license yourself before commercial use.
 
-## ASR model (sherpa-onnx Paraformer)
+## VAD model (Silero via sherpa-onnx)
 
-- Files: `sherpa-onnx-paraformer-zh-small-2024-03-09` (78 MB, default) or
+- File: `silero_vad.onnx`, unpacked to `models/silero_vad.onnx`
+- Source: k2-fsa/sherpa-onnx `asr-models` release assets
+  https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models
+- Notes: the file is the sherpa-onnx packaged/exported Silero VAD model used
+  by `sherpa_onnx.VoiceActivityDetector`; verify upstream model terms before
+  commercial use.
+
+## ASR model (sherpa-onnx, local)
+
+Default — bilingual Chinese + English:
+
+- Files: `sherpa-onnx-sense-voice-zh-en-ja-ko-yue-int8-2024-07-17`
+  (`model.int8.onnx` 228 MB + `tokens.txt`), unpacked to
+  `models/asr_sense_voice_zh_en_int8`
+- Languages: Chinese, English, Cantonese, Japanese, Korean
+- Source / license: SenseVoiceSmall from FunAudioLLM, published under the
+  **FunASR Model Open Source License Agreement v1.1** (free to use, modify and
+  share — attribution and retention of the model name are required; read it at
+  https://github.com/modelscope/FunASR/blob/main/MODEL_LICENSE)
+
+Optional fallbacks (Chinese only, kept for rollback):
+
+- Files: `sherpa-onnx-paraformer-zh-small-2024-03-09` (78 MB, faster) or
   `sherpa-onnx-paraformer-zh-int8-2025-10-07` (228 MB, more accurate)
 - Source: k2-fsa/sherpa-onnx `asr-models` release assets
   https://github.com/k2-fsa/sherpa-onnx/releases/tag/asr-models
-- License: see the README/LICENSE shipped inside each model archive and
-  the sherpa-onnx project (Apache-2.0 project; model licensing varies by
-  origin — FunASR Paraformer models are published by Alibaba DAMO under
-  their own terms; verify before commercial use).
+- License: see the README/LICENSE shipped inside each model archive, plus the
+  FunASR model license linked above (Paraformer models are published by
+  Alibaba DAMO under their own terms; verify before commercial use).
+
+Model selection, measured accuracy and latency: see
+`docs/asr-bilingual-models-2026-09-10.md`.
