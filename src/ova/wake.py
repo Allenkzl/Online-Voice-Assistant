@@ -99,7 +99,11 @@ DEFAULTS = {
     # inject_port=0 关闭该入口。见 docs/external-input-inject-2026-09-15.md
     "inject_host": "127.0.0.1",
     "inject_port": 8090,
-
+    # 对话语言（展厅旋钮长按 → POST /lang 切换，对整个对话持久生效）：
+    # zh=中文(默认) / en=英文；状态文件放 /tmp，重启后回到这里的默认值。
+    # 见 docs/dialogue-language-switch-2026-09-15.md
+    "dialogue_lang": "zh",
+    "dialogue_lang_file": "/tmp/ova_lang.state",
 }
 
 ENV_MAP = {
@@ -138,6 +142,8 @@ ENV_MAP = {
     "speaking_state_file": "WAKE_SPEAKING_STATE_FILE",
     "inject_host": "WAKE_INJECT_HOST",
     "inject_port": "WAKE_INJECT_PORT",
+    "dialogue_lang": "WAKE_DIALOGUE_LANG",
+    "dialogue_lang_file": "WAKE_DIALOGUE_LANG_FILE",
 }
 
 

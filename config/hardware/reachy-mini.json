@@ -35,5 +35,8 @@
   "glm_voice_pcm_rate": 24000,
   "inject_host": "127.0.0.1",
   "inject_port": 8090,
-  "inject_说明": "外部文本入口（展厅键盘）：POST /inject 文本=当作用户说完一句话（停止/继续/三主题讲解/普通问答都走现有路由），POST /wake=当作用户喊了唤醒词；由 ova-wake 进程提供，只监听本机，0=关闭。见 docs/external-input-inject-2026-09-15.md"
+  "inject_说明": "外部文本入口（展厅键盘）：POST /inject 文本=当作用户说完一句话（停止/继续/三主题讲解/普通问答都走现有路由），POST /wake=当作用户喊了唤醒词；由 ova-wake 进程提供，只监听本机，0=关闭。见 docs/external-input-inject-2026-09-15.md",
+  "dialogue_lang": "zh",
+  "dialogue_lang_file": "/tmp/ova_lang.state",
+  "dialogue_lang_说明": "对话语言（展厅旋钮长按 → POST /lang 切换，对整个对话持久生效）：zh=中文(默认) / en=英文；切换后讲解选版与 LLM 回答语言都跟随。状态文件放 /tmp，重启后回到 dialogue_lang 默认值；读不到或内容非法都回退默认值。见 docs/dialogue-language-switch-2026-09-15.md"
 }

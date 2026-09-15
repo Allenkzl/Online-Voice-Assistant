@@ -58,6 +58,7 @@ if "openwakeword" not in sys.modules:
 
 from ova import dialogue as dlg                                   # noqa: E402
 from ova import inject as inj                                     # noqa: E402
+from ova import lang as ova_lang                                  # noqa: E402
 from ova import wake                                              # noqa: E402
 from ova.dialogue import (                                        # noqa: E402
     InjectedTurn,
@@ -94,9 +95,11 @@ class FakeEngine:
         self.name = "fake"
         self.needs_transcript = needs_transcript
         self.calls: list[tuple] = []
+        self.cfgs: list[dict] = []       # 每次 respond 拿到的 cfg（看 reply_lang）
 
     def respond(self, samples, text, cfg):
         self.calls.append((samples, text))
+        self.cfgs.append(dict(cfg or {}))
         return Reply(audio_path=ROOT / "tests" / "asr_zh_smart_retail.wav",
                      text="好的。", transcript=text, timeout_s=42.0,
                      temporary=False, meta={"engine": self.name})
@@ -197,9 +200,13 @@ def fake_aplay(duration_s: float = 1.2):
 
 
 @contextlib.contextmanager
-def inject_server():
-    """Serve the real handler on an ephemeral loopback port; yields the port."""
-    server = inj.make_server("127.0.0.1", 0)
+def inject_server(cfg: dict | None = None):
+    """Serve the real handler on an ephemeral loopback port; yields the port.
+
+    ``cfg`` is bound into the handler exactly like ``start_inject_server()``
+    does, so ``/lang`` reads/writes the cfg of this test run.
+    """
+    server = inj.make_server("127.0.0.1", 0, cfg)
     threading.Thread(target=server.serve_forever, daemon=True).start()
     try:
         yield server.server_address[1]
@@ -236,6 +243,16 @@ def post(port: int, path: str, payload: dict | None = None,
     try:
         conn.request("POST", path, body=body.encode("utf-8"),
                      headers={"Content-Type": "application/json"})
+        response = conn.getresponse()
+        return response.status, json.loads(response.read().decode("utf-8"))
+    finally:
+        conn.close()
+
+
+def get(port: int, path: str) -> tuple[int, dict]:
+    conn = http.client.HTTPConnection("127.0.0.1", port, timeout=20)
+    try:
+        conn.request("GET", path)
         response = conn.getresponse()
         return response.status, json.loads(response.read().decode("utf-8"))
     finally:
@@ -282,9 +299,13 @@ def speaking_state(cfg: dict) -> bool:
 
 @contextlib.contextmanager
 def temp_cfg(**extra):
-    """Config with the speaking-state file pointed at a throwaway path."""
+    """Config with both state files (speaking / language) in a throwaway path."""
     with tempfile.TemporaryDirectory(prefix="ova_inject_cfg_") as tmp:
-        cfg = {"speaking_state_file": str(Path(tmp) / "speaking.state")}
+        cfg = {
+            "speaking_state_file": str(Path(tmp) / "speaking.state"),
+            "dialogue_lang": "zh",
+            "dialogue_lang_file": str(Path(tmp) / "ova_lang.state"),
+        }
         cfg.update(extra)
         yield cfg
 
@@ -349,6 +370,41 @@ def test_inject_lang_selects_the_requested_variant():
                                     engine=engine, route=route)
     assert state is not None and state.path.name == "smart_retail_en.wav"
     assert route["routed"] == "solution_intro"
+
+
+def test_explicit_inject_lang_beats_the_switched_language():
+    """显式 lang 最优先：切到英文后仍可单独要一份中文讲解。"""
+    backend, engine = FakeBackend(), FakeEngine()
+    with temp_cfg() as cfg:
+        ova_lang.set_lang(cfg, "en")
+        route: dict = {}
+        state = dlg._playback_from_text(backend, ASSETS, asr=FakeAsr(), cfg=cfg,
+                                        text="介绍一下智慧零售", samples=None,
+                                        engine=engine, lang="zh", route=route)
+    assert state is not None and state.path.name == "smart_retail_zh.wav"
+    assert route["detail"] == "smart_retail:zh"
+
+
+def test_switched_language_overrides_the_keyword_language():
+    """旋钮切换过语言后，中文关键词也播英文讲解；引擎拿到 reply_lang。"""
+    backend, engine = FakeBackend(), FakeEngine()
+    with temp_cfg() as cfg, fake_aplay(1.0) as log, no_microphone():
+        with inject_server(cfg) as port, capture_logs() as logs:
+            with FakeMainLoop(backend, ASSETS, cfg, engine) as loop:
+                status, body = post(port, "/lang", {"lang": "en"})
+                _, intro = post(port, "/inject", {"text": "介绍一下智慧零售"})
+                wait_for_aplay(log, 1)
+                _, chat = post(port, "/inject", {"text": "今天天气怎么样"})
+                loop.wait_turn()        # 第二条注入在播放循环里被取走
+                lines = aplay_lines(log)
+    assert status == 200 and body == {"ok": True, "lang": "en", "previous": "zh"}
+    assert intro["routed"] == "solution_intro"
+    assert intro["detail"] == "smart_retail:en"      # 不是关键词的中文变体
+    assert "smart_retail_en.wav" in lines[0]
+    assert chat["routed"] == "chat"
+    assert engine.cfgs[0]["reply_lang"] == "en"      # 语言透传到引擎
+    assert any("DIALOGUE_LANG lang=en source=current" in msg for msg in logs)
+    assert any("LANG_SET previous=zh lang=en" in msg for msg in logs)
 
 
 def test_inject_plain_question_answers_without_audio():
@@ -510,6 +566,8 @@ def test_wake_main_loop_serves_the_entrance():
             wait_for_aplay(log, 2)
             results.append(("wake", post(port, "/wake")))
             wait_for_aplay(log, 3, timeout_s=10.0)
+            results.append(("lang", post(port, "/lang", {"lang": "en"})))
+            results.append(("lang_get", get(port, "/lang")))
         except BaseException as exc:  # noqa: BLE001 - reported by the assertions
             driver_error.append(f"{type(exc).__name__}: {exc}")
         finally:
@@ -518,15 +576,19 @@ def test_wake_main_loop_serves_the_entrance():
     with tempfile.TemporaryDirectory(prefix="ova_main_loop_") as tmp:
         port = free_port()
         state_file = str(Path(tmp) / "speaking.state")
+        lang_file = str(Path(tmp) / "ova_lang.state")
         old_env = {k: os.environ.get(k) for k in (
             "WAKE_DIALOGUE", "WAKE_INJECT_HOST", "WAKE_INJECT_PORT",
-            "WAKE_RESPONSES_DIR", "WAKE_SPEAKING_STATE_FILE")}
+            "WAKE_RESPONSES_DIR", "WAKE_SPEAKING_STATE_FILE",
+            "WAKE_DIALOGUE_LANG", "WAKE_DIALOGUE_LANG_FILE")}
         os.environ.update({
             "WAKE_DIALOGUE": "1",
             "WAKE_INJECT_HOST": "127.0.0.1",
             "WAKE_INJECT_PORT": str(port),
             "WAKE_RESPONSES_DIR": str(ASSETS),
             "WAKE_SPEAKING_STATE_FILE": state_file,
+            "WAKE_DIALOGUE_LANG": "zh",
+            "WAKE_DIALOGUE_LANG_FILE": lang_file,
         })
         try:
             with fake_aplay(1.5) as log, capture_logs() as logs, patch(
@@ -562,6 +624,10 @@ def test_wake_main_loop_serves_the_entrance():
             "ok": True, "routed": "stop", "detail": "text=停止"}
         assert bodies["chat"][1]["routed"] == "chat"
         assert bodies["wake"][1] == {"ok": True}
+        # /lang 走的是 start_inject_server() 绑定的 cfg（生产路径）
+        assert bodies["lang"][1] == {"ok": True, "lang": "en", "previous": "zh"}
+        assert bodies["lang_get"][1] == {"ok": True, "lang": "en"}
+        assert ova_lang.current({"dialogue_lang_file": lang_file}) == "en"
 
         assert lines == ["smart_retail_zh.wav",          # inject: intro (cut short)
                          "asr_zh_smart_retail.wav",      # inject: engine reply
@@ -569,6 +635,8 @@ def test_wake_main_loop_serves_the_entrance():
         assert played == ["response.wav"]                # only the wake chime
         assert any("INJECT_INTERRUPT name=智慧零售讲解" in msg for msg in logs)
         assert any("WAKE_TRIGGERED source=external" in msg for msg in logs)
+        assert any("INJECT_READY host=127.0.0.1 port=%d lang=zh" % port in msg
+                   for msg in logs)
         assert speaking_state({"speaking_state_file": state_file}) is False
     assert dlg.INJECT.take() is None
 
@@ -583,6 +651,54 @@ def test_unknown_path_and_bad_body_are_rejected():
 
         status, body = post(port, "/inject", raw="{not json")
         assert status == 400 and "JSON" in body["error"]
+
+
+# --- language entrance ------------------------------------------------------
+
+def test_post_lang_toggles_and_sets():
+    """旋钮长按 = POST /lang {}（切换）；直设 = {"lang": "en"}。"""
+    with temp_cfg() as cfg, inject_server(cfg) as port, capture_logs() as logs:
+        status, body = post(port, "/lang")
+        assert status == 200 and body == {"ok": True, "lang": "en", "previous": "zh"}
+        assert ova_lang.current(cfg) == "en"
+
+        status, body = post(port, "/lang", {"toggle": True})
+        assert status == 200 and body == {"ok": True, "lang": "zh", "previous": "en"}
+
+        status, body = post(port, "/lang", {"lang": "ENGLISH"})
+        assert status == 200 and body == {"ok": True, "lang": "en", "previous": "zh"}
+        assert ova_lang.current(cfg) == "en"
+
+        status, body = post(port, "/lang", {"lang": " 中文 "})
+        assert status == 200 and body == {"ok": True, "lang": "zh", "previous": "en"}
+        assert ova_lang.current(cfg) == "zh"
+    assert any("LANG_SET previous=zh lang=en" in msg for msg in logs)
+
+
+def test_get_lang_reports_the_current_language():
+    with temp_cfg() as cfg, inject_server(cfg) as port:
+        status, body = get(port, "/lang")
+        assert status == 200 and body == {"ok": True, "lang": "zh"}
+
+        post(port, "/lang", {"lang": "en"})
+        status, body = get(port, "/lang")
+        assert status == 200 and body == {"ok": True, "lang": "en"}
+
+
+def test_post_lang_rejects_an_unknown_language():
+    with temp_cfg() as cfg, inject_server(cfg) as port:
+        status, body = post(port, "/lang", {"lang": "jp"})
+        assert status == 400 and body["ok"] is False
+        assert "unsupported lang" in body["error"]
+        assert ova_lang.current(cfg) == "zh"              # 没被改脏
+        assert not Path(cfg["dialogue_lang_file"]).exists()
+
+
+def test_get_unknown_path_is_404_json():
+    with temp_cfg(), inject_server() as port:
+        status, body = get(port, "/nope")
+        assert status == 404 and body["ok"] is False
+        assert "unknown path" in body["error"]
 
 
 def test_inject_text_reports_queued_while_nothing_consumes_it():

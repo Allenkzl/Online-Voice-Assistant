@@ -15,7 +15,7 @@ from pathlib import Path
 
 from ova.config import svc_event
 from ova.engines.base import EngineError, Reply
-from ova.llm import SYSTEM_PROMPT, CloudError, chat_once
+from ova.llm import CloudError, chat_once, system_prompt
 from ova.tools import WEATHER_TOOL, load_tool_calls, query_weather
 from ova.tts import synthesize
 
@@ -38,11 +38,16 @@ def clip(text: str, maxlen: int = 130) -> str:
     return cut
 
 
-def ask_with_weather(text: str) -> str:
+def ask_with_weather(text: str, lang: str | None = None) -> str:
     """Qwen with a weather tool: answer plain, or fetch live weather and
-    compose a short spoken summary from the fetched facts."""
+    compose a short spoken summary from the fetched facts.
+
+    ``lang`` is the dialogue language of this turn (``reply_lang``); ``en``
+    asks for an English answer. The same system message is reused for the tool
+    round, so the weather summary keeps the requested language too.
+    """
     messages = [
-        {"role": "system", "content": SYSTEM_PROMPT},
+        {"role": "system", "content": system_prompt(lang)},
         {"role": "user", "content": text},
     ]
     first = chat_once(messages, tools=[WEATHER_TOOL])
@@ -87,11 +92,13 @@ class PipelineEngine:
     def respond(self, samples, text: str, cfg: dict | None = None) -> Reply:
         cfg = cfg or self.cfg
         t0 = time.monotonic()
+        # 对话语言由编排层透传（cfg["reply_lang"]，展厅旋钮长按切换）
+        reply_lang = cfg.get("reply_lang")
         try:
-            reply_text = clip(ask_with_weather(text))
+            reply_text = clip(ask_with_weather(text, reply_lang))
         except CloudError as exc:
             raise EngineError(f"chat failed: {exc}") from exc
-        LOG.info("QWEN_REPLY text=%s", reply_text[:80])
+        LOG.info("QWEN_REPLY lang=%s text=%s", reply_lang or "-", reply_text[:80])
         svc_event("llm", f"千问回答: {reply_text[:80]}", "ok", text=reply_text[:120])
 
         try:

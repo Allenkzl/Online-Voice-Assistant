@@ -65,5 +65,9 @@
   "inject_host": "127.0.0.1",
   "inject_host_说明": "外部文本入口监听地址（POST /inject 注入文本、POST /wake 触发一轮对话，由 ova-wake 进程提供）；只给同机按键/脚本用，保持 127.0.0.1 即可",
   "inject_port": 8090,
-  "inject_port_说明": "外部文本入口端口；设为 0 关闭该入口（麦克风主链路不受影响）"
+  "inject_port_说明": "外部文本入口端口；设为 0 关闭该入口（麦克风主链路不受影响）",
+  "dialogue_lang": "zh",
+  "dialogue_lang_说明": "当前对话语言（默认 zh=中文 / en=英文）：外部按键长按（POST /lang）可切换，切换后对整个对话持续生效——讲解选版与 LLM 回答语言都跟随它；也可用 WAKE_DIALOGUE_LANG 或本项设默认值。见 docs/dialogue-language-switch-2026-09-15.md",
+  "dialogue_lang_file": "/tmp/ova_lang.state",
+  "dialogue_lang_file_说明": "对话语言的状态文件（POST /lang 把切换结果写在这里，GET /lang 读它）；放在 /tmp 则重启后回到 dialogue_lang 默认值；读不到或内容非法都回退默认值，不会报错"
 }
