@@ -26,7 +26,7 @@ os.environ.setdefault("OVA_HOME", str(ROOT))
 from ova.engines import EngineError, build_engine          # noqa: E402
 from ova.engines import pipeline as pipe                   # noqa: E402
 from ova.engines.base import ENGINE_ALIASES                # noqa: E402
-from ova.llm import CloudError                             # noqa: E402
+from ova.llm import SYSTEM_PROMPT, CloudError, system_prompt  # noqa: E402
 
 
 @contextlib.contextmanager
@@ -134,12 +134,45 @@ def test_ask_with_weather_empty_reply_raises():
             raise AssertionError("expected CloudError on empty reply")
 
 
+# --- reply language ----------------------------------------------------------
+
+def test_system_prompt_follows_the_reply_language():
+    """中文口径原样保留；英文时追加一条英文指令（旋钮长按切到 English）。"""
+    assert system_prompt(None) == SYSTEM_PROMPT
+    assert system_prompt("zh") == SYSTEM_PROMPT
+    assert system_prompt(" 中文 ") == SYSTEM_PROMPT
+    assert system_prompt("en").startswith(SYSTEM_PROMPT)
+    assert "Answer in English" in system_prompt("en")
+    assert "Answer in English" in system_prompt("ENGLISH")   # 大小写/别名
+    assert "Answer in English" in system_prompt("英文")
+
+
+def test_ask_with_weather_uses_the_reply_language():
+    calls = []
+
+    def fake_chat(messages, tools=None, timeout=30.0):
+        calls.append(messages)
+        if len(calls) == 1:
+            return {"content": "", "tool_calls": [{
+                "id": "call_1",
+                "function": {"name": "query_weather",
+                             "arguments": '{"city_slug": "Hangzhou"}'}}]}
+        return {"content": "Hangzhou, 23C, light rain."}
+
+    with patch(pipe, chat_once=fake_chat,
+               query_weather=lambda slug: f"{slug}: light rain 23C"):
+        reply = pipe.ask_with_weather("杭州天气怎么样", "en")
+    assert reply == "Hangzhou, 23C, light rain."
+    assert "Answer in English" in calls[0][0]["content"]
+    assert calls[1][0] == calls[0][0]        # 工具轮复用同一份 system message
+
+
 # --- pipeline respond --------------------------------------------------------
 
 def test_respond_returns_playable_reply(tmp_path):
     engine = build_engine({"engine": "pipeline"}, asr=object())
     with patch(pipe,
-               ask_with_weather=lambda text: "欢迎来到智慧零售区。",
+               ask_with_weather=lambda text, lang=None: "欢迎来到智慧零售区。",
                synthesize=lambda text, timeout=60.0: _fake_wav_bytes()):
         reply = engine.respond(np.zeros(16000, dtype=np.int16), "介绍智慧零售")
 
@@ -158,7 +191,7 @@ def test_respond_returns_playable_reply(tmp_path):
 def test_respond_maps_chat_failure_to_engine_error():
     engine = build_engine({"engine": "pipeline"}, asr=object())
 
-    def boom(text):
+    def boom(text, lang=None):
         raise CloudError("HTTP 429: rate limited")
 
     with patch(pipe, ask_with_weather=boom):
@@ -177,7 +210,7 @@ def test_respond_maps_tts_failure_to_engine_error():
         raise CloudError("tts audio download failed")
 
     with patch(pipe,
-               ask_with_weather=lambda text: "好的。",
+               ask_with_weather=lambda text, lang=None: "好的。",
                synthesize=boom):
         try:
             engine.respond(np.zeros(1600, dtype=np.int16), "你好")
@@ -185,6 +218,29 @@ def test_respond_maps_tts_failure_to_engine_error():
             assert "tts failed" in str(exc)
         else:  # pragma: no cover - defensive
             raise AssertionError("expected EngineError")
+
+
+def test_respond_hands_the_dialogue_language_to_the_chat_call():
+    """编排层放进 cfg 的 reply_lang 会一路传到千问的 system message。"""
+    engine = build_engine({"engine": "pipeline"}, asr=object())
+    seen: list[list[dict]] = []
+
+    def fake_chat(messages, tools=None, timeout=30.0):
+        seen.append(messages)
+        return {"content": "Sure."}
+
+    with patch(pipe, chat_once=fake_chat,
+               synthesize=lambda text, timeout=60.0: _fake_wav_bytes()):
+        english = engine.respond(np.zeros(1600, dtype=np.int16), "hello",
+                                 {"reply_lang": "en"})
+        chinese = engine.respond(np.zeros(1600, dtype=np.int16), "你好",
+                                 {"reply_lang": "zh"})
+
+    assert english.text == "Sure." and chinese.text == "Sure."
+    assert "Answer in English" in seen[0][0]["content"]
+    assert seen[1][0]["content"] == SYSTEM_PROMPT      # 中文仍是原口径
+    for reply in (english, chinese):        # 同毫秒的两个回复可能同名 tmp 文件
+        reply.audio_path.unlink(missing_ok=True)
 
 
 # --- direct runner (no pytest required) -------------------------------------

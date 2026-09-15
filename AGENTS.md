@@ -84,6 +84,13 @@
   只在 `ova-wake` 进程内起 daemon 线程，不新增第三方依赖。播放中注入先打断当前播放
   （复用 `play_interruptible()` 已有的终止路径，不另杀 `aplay`），注入触发的播放同样写 `speaking_state_file`。
   设计与已知限制见 `docs/external-input-inject-2026-09-15.md`。
+- **对话语言（持久切换）**：`POST /lang`（body `{}`/`{"toggle":true}` = 中英互切，`{"lang":"en"}` = 直设，
+  非法值 400）与 `GET /lang` 由同一个 `ova-wake` HTTP 入口提供；当前语言存在
+  `dialogue_lang_file`（默认 `/tmp/ova_lang.state`，`WAKE_DIALOGUE_LANG_FILE`），读不到/内容非法回退 `dialogue_lang`
+  （`WAKE_DIALOGUE_LANG`，默认 `zh`），任何异常都不抛。它接到两处：讲解选版（显式 `lang` 优先，
+  其次**现场切换过的**语言，都没指定时仍按关键词语言，保留中英双语触发行为）与 LLM 回答语言
+  （`cfg["reply_lang"]` → `pipeline` 的 `llm.system_prompt(lang)`，`en` 追加英文指令）。
+  TTS 音色不变，`e2e` 引擎不跟随语言。见 `docs/dialogue-language-switch-2026-09-15.md`。
 
 ## 变更日志
 
@@ -106,3 +113,4 @@
 | 2026-09-11 | `dev` | 线上部署并验证 `pipeline + Silero VAD + SenseVoice`：服务 active，KWS 只加载 `hey_jarvis_v0.1`，用户现场确认效果良好。 |
 | 2026-09-11 | `main` | 合并 `dev` 到 `main`，主分支收口本轮唤醒、VAD、ASR、双引擎、展厅讲解与待机动作改动。 |
 | 2026-09-15 | `main` | 新增外部文本输入入口：`ova-wake` 内置 `POST /inject`（文本当识别结果，复用停止/继续/三主题讲解/普通问答路由，播放中注入先打断当前播放）与 `POST /wake`（当唤醒命中起一轮对话）；`WAKE_INJECT_PORT` 默认 8090、`0`=关闭，仅监听本机，无新依赖。 |
+| 2026-09-15 | `main` | 新增持久对话语言切换：展厅旋钮长按 → `POST /lang`（中↔英，`GET /lang` 读当前值），状态存 `dialogue_lang_file`（默认 `/tmp/ova_lang.state`），回退 `dialogue_lang`（默认 `zh`）；切换后讲解选版与 `pipeline` 的 LLM 回答语言都跟随（`reply_lang` → `llm.system_prompt()`），TTS 音色与 `e2e` 引擎不变。新增 `src/ova/lang.py` 与 `tests/test_lang.py`。 |

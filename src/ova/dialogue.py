@@ -18,6 +18,11 @@ routing without touching the microphone: :func:`inject_text` queues the text,
 a running :func:`play_interruptible` stops on it, and either the wake main loop
 (idle) or :func:`_run_playback_loop` (playing) routes it exactly like an ASR
 transcript. :func:`trigger_wake` requests one wake round (POST /wake).
+
+The dialogue language itself is switchable from the showroom keypad (POST
+/lang, see :mod:`ova.lang`) and persists for the whole conversation: it picks
+the showroom intro variant and is handed to the engine as ``reply_lang``
+(``pipeline`` turns it into the LLM system prompt).
 """
 
 from __future__ import annotations
@@ -43,6 +48,7 @@ from ova.wake import (
 from ova.config import svc_event
 from ova.engines import Engine, EngineError, Reply, build_engine
 from ova.asr import LocalAsr
+from ova import lang as ova_lang
 from ova.solutions import SolutionIntro, load_solution_intros, match_solution_intro
 
 LOG = logging.getLogger("dialogue")
@@ -518,8 +524,10 @@ def _intro_for_lang(intro: SolutionIntro, lang: str | None) -> SolutionIntro:
     """Prefer an explicitly requested language variant of a matched intro.
 
     Voice commands carry no language field — the matched keyword decides. Text
-    injected from outside may name one, and then that variant is used when the
-    exhibit has it.
+    injected from outside may name one, and the language switched from the
+    showroom keypad (:func:`ova.lang.chosen`) counts as one too; then that
+    variant is used when the exhibit has it. While nobody chose a language
+    (``chosen()`` is None) the keyword keeps deciding, exactly as before.
     """
     if not lang or lang == intro.language:
         return intro
@@ -550,11 +558,18 @@ def _playback_from_text(
 
     ``text`` is the ASR transcript (may be "" for end-to-end engines) and
     ``samples`` the matching 16 kHz mono audio. ``lang`` is an optional
-    language hint for injected text (None lets the keywords decide) and
-    ``route`` receives the routing verdict (``routed``/``detail``) so external
-    callers can report it. Returns None to go idle.
+    language hint for injected text (None lets the persistent dialogue language
+    — see :mod:`ova.lang` — and the keywords decide) and ``route`` receives the
+    routing verdict (``routed``/``detail``) so external callers can report it.
+    Returns None to go idle.
     """
     engine = engine if engine is not None else build_engine(cfg, asr=asr)
+
+    # 本轮对话语言：外部显式传入的 lang 优先，否则用持久化的当前语言
+    # （展厅旋钮长按切换，见 docs/dialogue-language-switch-2026-09-15.md）。
+    effective = lang or ova_lang.current(cfg)
+    LOG.info("DIALOGUE_LANG lang=%s source=%s", effective,
+             "explicit" if lang else "current")
 
     def _mark(value: str, detail: str = "") -> None:
         if route is not None:
@@ -572,7 +587,8 @@ def _playback_from_text(
 
         intro = match_solution_intro(text)
         if intro is not None:
-            intro = _intro_for_lang(intro, lang)
+            # 讲解选版：显式 lang 优先，其次现场切换过的对话语言，都没有则按关键词。
+            intro = _intro_for_lang(intro, lang or ova_lang.chosen(cfg))
             LOG.info("SOLUTION_INTRO id=%s lang=%s file=%s",
                      intro.id, intro.language, intro.audio_path)
             svc_event("dialog", f"播放{intro.name}讲解({intro.language})",
@@ -608,7 +624,7 @@ def _playback_from_text(
     if cfg.get("ack_before_reply", False):
         play_asset(backend, root, "ack_think.wav")
     try:
-        reply = engine.respond(samples, text, cfg)
+        reply = engine.respond(samples, text, {**cfg, "reply_lang": effective})
     except EngineError as exc:
         LOG.error("ENGINE_FAILED engine=%s: %s", engine.name, exc)
         svc_event("dialog", f"引擎失败({engine.name}): {exc}"[:140], "warn")

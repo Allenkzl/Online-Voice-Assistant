@@ -13,8 +13,9 @@
   切换只改一个配置项，见 [docs/dual-engine-architecture.md](docs/dual-engine-architecture.md)
 - **调试台**：网页分环节测试（唤醒打分/听写/请求/响应/TTS/全链路时间线）
 - **外部文本入口**：`ova-wake` 内置只监听本机的 HTTP 入口（默认 `127.0.0.1:8090`），
-  展厅按键或脚本可注入一句话、或触发一次唤醒，走完全相同的路由与打断机制
-  （见 [docs/external-input-inject-2026-09-15.md](docs/external-input-inject-2026-09-15.md)）
+  展厅按键或脚本可注入一句话、触发一次唤醒、或切换对话语言（长按旋钮），走完全相同的路由与打断机制
+  （见 [docs/external-input-inject-2026-09-15.md](docs/external-input-inject-2026-09-15.md)、
+  [docs/dialogue-language-switch-2026-09-15.md](docs/dialogue-language-switch-2026-09-15.md)）
 
 架构图与各环节说明见 [docs/architecture.md](docs/architecture.md)。
 
@@ -79,12 +80,20 @@ curl -s -X POST http://127.0.0.1:8090/inject -d '{"text":"introduce smart retail
 # 唤醒 = 一次 Hey Jarvis 命中：进入一轮“听访客说话 → ASR → 回答”
 curl -s -X POST http://127.0.0.1:8090/wake
 
+# 对话语言 = 长按旋钮：{} 切换中英，{"lang":"en"} 直接设为英文；GET 读当前语言
+curl -s -X POST http://127.0.0.1:8090/lang
+curl -s -X POST http://127.0.0.1:8090/lang -d '{"lang":"en"}'
+curl -s http://127.0.0.1:8090/lang
+
 # 返回 {"ok":true,"routed":"solution_intro|stop|continue|chat|idle","detail":"..."}
+#      {"ok":true,"lang":"en","previous":"zh"} / {"ok":true,"lang":"zh"}
 ```
 
 监听地址/端口由 `WAKE_INJECT_HOST`（默认 `127.0.0.1`）与 `WAKE_INJECT_PORT`
 （默认 `8090`，**设 `0` 关闭该入口**）控制。参数语义、日志与已知限制见
 [docs/external-input-inject-2026-09-15.md](docs/external-input-inject-2026-09-15.md)。
+语言切换（`POST|GET /lang`、持久化位置、对讲解与 LLM 的回答语言的影响）见
+[docs/dialogue-language-switch-2026-09-15.md](docs/dialogue-language-switch-2026-09-15.md)。
 
 ## 换硬件适配
 
@@ -152,7 +161,8 @@ DEPLOY_CODE=1 ENGINE=e2e ./scripts/deploy_to_robot.sh
 | `WAKE_END_SILENCE_S` | `1.2` | 判定“说完了”的静音时长 |
 | `WAKE_LISTEN_DELAY_S` | `0.6` | 应答后等回声消散再开始听 |
 | `WAKE_ASR_MODEL_DIR` | `models/asr_sense_voice_zh_en_int8` | ASR 模型目录（可指向 paraformer 中文模型目录回退） |
-| `WAKE_INJECT_HOST` / `WAKE_INJECT_PORT` | `127.0.0.1` / `8090` | 外部文本入口的监听地址/端口（`POST /inject` 注入文本、`POST /wake` 触发一轮对话）；`0` = 关闭入口 |
+| `WAKE_INJECT_HOST` / `WAKE_INJECT_PORT` | `127.0.0.1` / `8090` | 外部文本入口的监听地址/端口（`POST /inject` 注入文本、`POST /wake` 触发一轮对话、`POST\|GET /lang` 切换/读对话语言）；`0` = 关闭入口 |
+| `WAKE_DIALOGUE_LANG` / `WAKE_DIALOGUE_LANG_FILE` | `zh` / `/tmp/ova_lang.state` | 对话语言（`zh`/`en`）与语言状态文件；长按旋钮→`POST /lang` 持久切换，讲解选版与 LLM 回答语言都跟随；放 `/tmp` 则重启机器后回到默认值 |
 | `CHAT_MODEL` | `qwen-flash` | 千问模型 |
 | `TTS_MODEL` / `TTS_VOICE` | `qwen3-tts-flash` / `Cherry` | 合成模型/音色 |
 | `HJV_EVENT_FILE` | 空 | 写事件 JSONL 供调试台时间线显示 |
@@ -178,6 +188,7 @@ docs/
 ├── showroom-intros-2026-09-10.md        # 三主题展厅讲解
 ├── barge-in-playback-2026-09-10.md      # 播放中打断
 ├── external-input-inject-2026-09-15.md  # 外部文本/唤醒入口（展厅按键）
+├── dialogue-language-switch-2026-09-15.md  # 对话语言切换（旋钮长按 → POST /lang）
 └── reachy-demo-official-watchdog-2026-09-10.md  # 待机动作与看门狗
 ```
 
