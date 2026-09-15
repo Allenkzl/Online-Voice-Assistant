@@ -154,7 +154,7 @@ ACTIVE: dict[str, Worker] = {}
 ACTIVE_LOCK = threading.Lock()
 
 
-TIMEOUTS = {"llm": 45.0, "tts": 120.0, "full": 300.0,
+TIMEOUTS = {"llm": 45.0, "tts": 120.0, "full": 300.0, "ask": 180.0,
             "asr": 60.0, "asr_cont": None, "vad": 20.0, "wake": None,
             "e2e": 300.0}
 
@@ -398,6 +398,61 @@ def tts_test(text: str, play: bool = True):
         backend.play_file(AUDIO_DIR / fname, timeout=120)
         BUS.emit("tts", "ok", f"播放完成 ({(time.monotonic()-t1)*1000:.0f}ms)")
     return fname
+
+
+def _fx_pub(payload: str) -> None:
+    """发布灯效状态到 hall/keyboard/fx（stdlib 裸 MQTT，qos0）。"""
+    import socket as _sock
+    import struct as _st
+
+    def _u(b: bytes) -> bytes:
+        return _st.pack(">H", len(b)) + b
+
+    def _enc(n: int) -> bytes:
+        o = bytearray()
+        while True:
+            b = n % 128
+            n //= 128
+            if n:
+                o.append(b | 0x80)
+            else:
+                o.append(b)
+                return bytes(o)
+
+    try:
+        s = _sock.create_connection(("100.131.78.82", 1883), timeout=5)
+        cid = _u(f"ova-fx-{time.time()}".encode())
+        c = _u(b"MQTT") + bytes([4, 2]) + _st.pack(">H", 30) + cid
+        s.sendall(b"\x10" + _enc(len(c)) + c)
+        s.recv(4)
+        body = _u(b"hall/keyboard/fx") + payload.encode()
+        s.sendall(b"\x30" + _enc(len(body)) + body)
+        s.close()
+    except Exception as exc:
+        LOG.warn("fx publish failed: %s", exc)
+
+
+def ask_test(text: str):
+    """按键 Prompt 注入：LLM 理解后直接用 TTS 播报答复。"""
+    BUS.emit("system", "info", f"按键提问: {text}")
+    # 即时应答音：LLM/TTS 要数秒，先给用户一个听觉反馈（后台播放，不阻塞 LLM）
+    import threading as _th
+
+    def _play_ack():
+        try:
+            get_backend().play_file(Path("/home/pollen/ova/assets/response.wav"),
+                                    timeout=10)
+        except Exception as exc:
+            LOG.warn("ack sound failed: %s", exc)
+
+    _th.Thread(target=_play_ack, daemon=True).start()
+    reply = llm_test(text)
+    if not reply:
+        BUS.emit("system", "warn", "LLM 答复为空，不播报")
+        return
+    _fx_pub("talk")
+    tts_test(reply)
+    _fx_pub("idle")
 
 
 def save_audio_bytes(wav: bytes, tag: str) -> str:
@@ -741,6 +796,9 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/llm":
                 text = body.get("text", "")
                 self._json(200, {"started": launch("llm", llm_test, text)})
+            elif path == "/api/ask":
+                text = body.get("text", "")
+                self._json(200, {"started": launch("ask", ask_test, text)})
             elif path == "/api/tts":
                 text = body.get("text", "")
                 play = body.get("play", True)

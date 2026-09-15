@@ -78,6 +78,12 @@
 - 播放中打断记录见 `docs/barge-in-playback-2026-09-10.md`；打断检测使用独立参数，当前建议 `barge_in_threshold=0.30 / barge_in_hits=4`，并用 `BARGE_LISTENING` 日志观察播放期间峰值。
 - 唤醒灵敏度当前试运行 `threshold=0.28 / hits=4`；若仍需叫多次，下一档试 `0.25 / 4`；若误触发回升，退回 `0.30 / 4`。
 - 头部待机动作当前恢复为官方 recorded move 库，并新增独立看门狗；记录见 `docs/reachy-demo-official-watchdog-2026-09-10.md`。前一版轻量小幅 `/api/move/goto` 记录见 `docs/reachy-demo-lite-motion-2026-09-10.md`，可作为回退方案。
+- **外部文本入口**：`ova-wake` 内置 stdlib HTTP 入口 `POST /inject`（文本 = 一句识别结果，走现有路由：
+  停止 / 继续 / 三主题预制讲解 / 普通问答）与 `POST /wake`（= 一次唤醒命中，进入一轮"听访客说话 → 回答"）。
+  监听地址/端口由 `WAKE_INJECT_HOST`（默认 `127.0.0.1`）/ `WAKE_INJECT_PORT`（默认 `8090`，**`0` = 关闭**）控制；
+  只在 `ova-wake` 进程内起 daemon 线程，不新增第三方依赖。播放中注入先打断当前播放
+  （复用 `play_interruptible()` 已有的终止路径，不另杀 `aplay`），注入触发的播放同样写 `speaking_state_file`。
+  设计与已知限制见 `docs/external-input-inject-2026-09-15.md`。
 
 ## 变更日志
 
@@ -99,3 +105,4 @@
 | 2026-09-11 | `dev` | Reachy Mini 主链路切为 Silero VAD + SenseVoice 中英 ASR；保留 energy VAD 与 Paraformer 中文 ASR 回退。 |
 | 2026-09-11 | `dev` | 线上部署并验证 `pipeline + Silero VAD + SenseVoice`：服务 active，KWS 只加载 `hey_jarvis_v0.1`，用户现场确认效果良好。 |
 | 2026-09-11 | `main` | 合并 `dev` 到 `main`，主分支收口本轮唤醒、VAD、ASR、双引擎、展厅讲解与待机动作改动。 |
+| 2026-09-15 | `main` | 新增外部文本输入入口：`ova-wake` 内置 `POST /inject`（文本当识别结果，复用停止/继续/三主题讲解/普通问答路由，播放中注入先打断当前播放）与 `POST /wake`（当唤醒命中起一轮对话）；`WAKE_INJECT_PORT` 默认 8090、`0`=关闭，仅监听本机，无新依赖。 |

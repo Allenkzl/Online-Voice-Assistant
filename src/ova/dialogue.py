@@ -12,11 +12,17 @@ routes local commands (stop/continue/showroom intros), asks the configured
         -> EngineError?             play fallback_net, return to idle
     play reply                      interrupts on "Hey Jarvis", then stop /
                                     continue / next intro via local ASR
+
+Externally injected text (POST /inject, see :mod:`ova.inject`) enters the same
+routing without touching the microphone: :func:`inject_text` queues the text,
+a running :func:`play_interruptible` stops on it, and either the wake main loop
+(idle) or :func:`_run_playback_loop` (playing) routes it exactly like an ASR
+transcript. :func:`trigger_wake` requests one wake round (POST /wake).
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 import logging
 import os
@@ -37,7 +43,7 @@ from ova.wake import (
 from ova.config import svc_event
 from ova.engines import Engine, EngineError, Reply, build_engine
 from ova.asr import LocalAsr
-from ova.solutions import match_solution_intro
+from ova.solutions import SolutionIntro, load_solution_intros, match_solution_intro
 
 LOG = logging.getLogger("dialogue")
 
@@ -67,6 +73,7 @@ class PlaybackResult:
     interrupted: bool
     elapsed_s: float = 0.0
     score: float = 0.0
+    external: bool = False   # stopped by injected text, not by "Hey Jarvis"
 
 
 @dataclass
@@ -75,6 +82,105 @@ class BargeCommand:
 
     samples: object = None
     text: str = ""
+
+
+@dataclass
+class InjectedTurn:
+    """One utterance that entered from outside (a keyboard, not the microphone).
+
+    The turn travels from the HTTP entrance to whichever loop is running: the
+    wake main loop while idle, :func:`_run_playback_loop` while audio plays.
+    ``report`` collects the routing verdict, ``done`` releases the HTTP handler
+    that is waiting for it.
+    """
+
+    text: str
+    lang: str | None = None
+    report: dict = field(default_factory=dict)
+    done: threading.Event = field(default_factory=threading.Event)
+
+    def finish(self) -> None:
+        self.report.setdefault("routed", "idle")
+        self.report.setdefault("detail", "")
+        self.done.set()
+
+
+class InjectControl:
+    """Queue + interrupt flag shared by the external entrance and the loops."""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._turns: list[InjectedTurn] = []
+        self._interrupt = threading.Event()
+        self._wake = threading.Event()
+
+    def push(self, turn: InjectedTurn) -> None:
+        """Queue a turn and ask a running playback to stop."""
+        with self._lock:
+            self._turns.append(turn)
+            self._interrupt.set()
+
+    def take(self) -> InjectedTurn | None:
+        """Pop the oldest queued turn (single consumer: the main thread)."""
+        with self._lock:
+            turn = self._turns.pop(0) if self._turns else None
+            if not self._turns:
+                self._interrupt.clear()
+            return turn
+
+    def interrupted(self) -> bool:
+        """True while injected text is waiting for the playback loop."""
+        return self._interrupt.is_set()
+
+    def trigger_wake(self) -> None:
+        self._wake.set()
+
+    def take_wake(self) -> bool:
+        """Consume one pending external wake (repeats collapse into one)."""
+        if self._wake.is_set():
+            self._wake.clear()
+            return True
+        return False
+
+    def clear(self) -> None:
+        """Drop queued turns and pending signals (shutdown/tests)."""
+        with self._lock:
+            self._turns.clear()
+            self._interrupt.clear()
+        self._wake.clear()
+
+
+INJECT = InjectControl()
+INJECT_RESULT_TIMEOUT_S = 12.0
+
+
+def inject_text(text: str, lang: str | None = None,
+                timeout_s: float = INJECT_RESULT_TIMEOUT_S) -> dict:
+    """Route one external utterance exactly like a recognized one.
+
+    The text is queued for the wake main loop (idle) or for the playback loop
+    (playing: the current audio stops first). Blocks until a loop has taken the
+    turn and returns its routing verdict.
+    """
+    turn = InjectedTurn(text=str(text or "").strip(), lang=lang)
+    LOG.info("INJECT_TEXT text=%s lang=%s", turn.text, turn.lang or "-")
+    svc_event("inject", f"外部注入: {turn.text}", "info", text=turn.text)
+    INJECT.push(turn)
+    if not turn.done.wait(timeout_s):
+        LOG.warning("INJECT_TIMEOUT text=%s waited=%.0fs", turn.text, timeout_s)
+        return {"routed": "idle",
+                "detail": f"queued, no loop took it within {timeout_s:.0f}s"}
+    report = dict(turn.report)
+    LOG.info("INJECT_ROUTED routed=%s detail=%s",
+             report.get("routed"), report.get("detail"))
+    return report
+
+
+def trigger_wake() -> None:
+    """Ask the wake main loop for one dialogue round (POST /wake)."""
+    LOG.info("WAKE_TRIGGERED source=external")
+    svc_event("wake", "外部触发：开始一轮对话", "info")
+    INJECT.trigger_wake()
 
 
 STOP_WORDS = ("停止", "停一下", "停下", "别说了", "不要说了", "先停", "stop", "cancel")
@@ -275,6 +381,25 @@ def play_interruptible(backend, state: PlaybackState, cfg: dict) -> PlaybackResu
     start = time.monotonic()
     try:
         while proc.poll() is None:
+            if INJECT.interrupted():
+                proc.terminate()
+                try:
+                    proc.wait(timeout=1.0)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
+                elapsed = min(source_duration,
+                              start_offset + time.monotonic() - start)
+                LOG.info("INJECT_INTERRUPT name=%s elapsed=%.2fs",
+                         state.name, elapsed)
+                svc_event("dialog", f"{state.name}被外部注入打断", "warn",
+                          elapsed=round(elapsed, 2))
+                return PlaybackResult(
+                    completed=False,
+                    interrupted=True,
+                    elapsed_s=elapsed,
+                    external=True,
+                )
             if interrupt_event.is_set():
                 proc.terminate()
                 try:
@@ -389,6 +514,26 @@ def _state_from_reply(engine: Engine, reply: Reply) -> PlaybackState:
     )
 
 
+def _intro_for_lang(intro: SolutionIntro, lang: str | None) -> SolutionIntro:
+    """Prefer an explicitly requested language variant of a matched intro.
+
+    Voice commands carry no language field — the matched keyword decides. Text
+    injected from outside may name one, and then that variant is used when the
+    exhibit has it.
+    """
+    if not lang or lang == intro.language:
+        return intro
+    for candidate in load_solution_intros():
+        if (candidate.id == intro.id and candidate.language == lang
+                and candidate.audio_path.is_file()):
+            LOG.info("SOLUTION_INTRO_LANG id=%s %s->%s",
+                     intro.id, intro.language, candidate.language)
+            return candidate
+    LOG.warning("SOLUTION_INTRO_LANG_MISSING id=%s want=%s keep=%s",
+                intro.id, lang, intro.language)
+    return intro
+
+
 def _playback_from_text(
     backend,
     root: Path,
@@ -398,13 +543,23 @@ def _playback_from_text(
     samples=None,
     previous: PlaybackState | None = None,
     engine: Engine | None = None,
+    lang: str | None = None,
+    route: dict | None = None,
 ) -> PlaybackState | None:
     """Route the turn and ask the engine for the next playback.
 
     ``text`` is the ASR transcript (may be "" for end-to-end engines) and
-    ``samples`` the matching 16 kHz mono audio. Returns None to go idle.
+    ``samples`` the matching 16 kHz mono audio. ``lang`` is an optional
+    language hint for injected text (None lets the keywords decide) and
+    ``route`` receives the routing verdict (``routed``/``detail``) so external
+    callers can report it. Returns None to go idle.
     """
     engine = engine if engine is not None else build_engine(cfg, asr=asr)
+
+    def _mark(value: str, detail: str = "") -> None:
+        if route is not None:
+            route["routed"] = value
+            route["detail"] = detail
 
     if engine.needs_transcript:
         LOG.info("USER_SAID text=%s", text)
@@ -412,18 +567,22 @@ def _playback_from_text(
         if _is_stop_command(text):
             LOG.info("BARGE_STOP text=%s", text)
             svc_event("dialog", "收到停止指令，回到待唤醒", "ok")
+            _mark("stop", f"text={text}")
             return None
 
         intro = match_solution_intro(text)
         if intro is not None:
+            intro = _intro_for_lang(intro, lang)
             LOG.info("SOLUTION_INTRO id=%s lang=%s file=%s",
                      intro.id, intro.language, intro.audio_path)
             svc_event("dialog", f"播放{intro.name}讲解({intro.language})",
                       "ok", text=intro.text[:120], lang=intro.language)
             if not intro.audio_path.is_file():
                 LOG.error("solution intro audio missing: %s", intro.audio_path)
+                _mark("idle", f"{intro.id} audio missing")
                 play_asset(backend, root, "fallback_question.wav")
                 return None
+            _mark("solution_intro", f"{intro.id}:{intro.language}")
             return PlaybackState(
                 path=intro.audio_path,
                 name=f"{intro.name}讲解",
@@ -437,10 +596,12 @@ def _playback_from_text(
             LOG.info("BARGE_CONTINUE name=%s offset=%.2fs", previous.name, previous.offset_s)
             svc_event("dialog", f"继续{previous.name}", "ok",
                       elapsed=round(previous.offset_s, 2))
+            _mark("continue", f"{previous.name} offset_s={previous.offset_s:.2f}")
             return previous
 
-    if samples is None:
+    if samples is None and not (text and engine.needs_transcript):
         LOG.warning("ENGINE_NO_AUDIO engine=%s", engine.name)
+        _mark("idle", f"no audio for {engine.name}")
         play_asset(backend, root, "fallback_question.wav")
         return None
 
@@ -451,14 +612,17 @@ def _playback_from_text(
     except EngineError as exc:
         LOG.error("ENGINE_FAILED engine=%s: %s", engine.name, exc)
         svc_event("dialog", f"引擎失败({engine.name}): {exc}"[:140], "warn")
+        _mark("idle", f"engine failed {engine.name}: {exc}"[:120])
         play_asset(backend, root, "fallback_net.wav")
         return None
     except Exception as exc:  # noqa: BLE001 - a broken engine must not kill the service
         LOG.error("ENGINE_ERROR engine=%s %s: %s",
                   engine.name, type(exc).__name__, exc)
         svc_event("dialog", f"引擎异常({engine.name}): {type(exc).__name__}", "warn")
+        _mark("idle", f"engine error {engine.name}: {type(exc).__name__}")
         play_asset(backend, root, "fallback_net.wav")
         return None
+    _mark("chat", f"engine={engine.name}")
     return _state_from_reply(engine, reply)
 
 
@@ -485,6 +649,24 @@ def _run_playback_loop(
             svc_event("dialog", current.done_msg, "ok", lang=current.done_lang)
             _cleanup_state(current)
             return
+
+        if result.external:
+            turn = INJECT.take()
+            if turn is not None:
+                # Injected text outranks the microphone: route it right away
+                # instead of opening a barge-in command window.
+                LOG.info("INJECT_NEXT text=%s lang=%s", turn.text, turn.lang or "-")
+                try:
+                    next_state = _playback_from_text(
+                        backend, root, asr, cfg, turn.text, samples=None,
+                        previous=current, engine=engine, lang=turn.lang,
+                        route=turn.report)
+                finally:
+                    turn.finish()
+                if next_state is not current:
+                    _cleanup_state(current)
+                current = next_state
+                continue
 
         command = listen_command_after_barge_in(backend, asr, cfg)
         if command.samples is None and not command.text:

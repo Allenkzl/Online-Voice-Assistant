@@ -21,6 +21,10 @@ Detection semantics (tuned on a real Reachy Mini):
     spikes while real utterances (>=0.5 s) pass losslessly.
   - After the acknowledgement the capture stream is reopened so the
     robot's own playback echo cannot trigger a second wake.
+
+An external text/wake entrance (see :mod:`ova.inject`, loopback
+``http://127.0.0.1:8090`` by default) can stand in for the wake word or for
+the ASR result: the idle loop below polls it and runs the same dialogue code.
 """
 
 from __future__ import annotations
@@ -91,6 +95,10 @@ DEFAULTS = {
     "barge_in_resume_rewind_s": 0.6,
     "barge_in_log_interval_s": 2.0,
     "speaking_state_file": "/tmp/ova_speaking.state",
+    # 外部文本入口（POST /inject 文本、POST /wake 唤醒），只监听本机；
+    # inject_port=0 关闭该入口。见 docs/external-input-inject-2026-09-15.md
+    "inject_host": "127.0.0.1",
+    "inject_port": 8090,
 
 }
 
@@ -128,6 +136,8 @@ ENV_MAP = {
     "barge_in_resume_rewind_s": "WAKE_BARGE_IN_RESUME_REWIND_S",
     "barge_in_log_interval_s": "WAKE_BARGE_IN_LOG_INTERVAL_S",
     "speaking_state_file": "WAKE_SPEAKING_STATE_FILE",
+    "inject_host": "WAKE_INJECT_HOST",
+    "inject_port": "WAKE_INJECT_PORT",
 }
 
 
@@ -136,7 +146,7 @@ def _to_type(name: str, value: str):
         return value.strip().lower() in ("1", "true", "yes", "on")
     if name == "channel":
         return "mean" if value == "mean" else int(value)
-    if name in ("hits", "barge_in_hits", "glm_voice_pcm_rate"):
+    if name in ("hits", "barge_in_hits", "glm_voice_pcm_rate", "inject_port"):
         return int(value)
     if name in ("threshold", "cooldown", "end_silence_s", "max_question_s",
                  "listen_delay_s", "vad_threshold", "vad_min_speech_s",
@@ -571,6 +581,38 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def ensure_dialogue_engine(cfg: dict, asr=None, engine=None):
+    """Build the dialogue engine (and the transcript ASR) on first use."""
+    from ova.engines import build_engine
+    if engine is None:
+        engine = build_engine(cfg, asr=asr)
+    if engine.needs_transcript and asr is None:
+        from ova.asr import LocalAsr
+        asr = LocalAsr(Path(cfg["asr_model_dir"]))
+        engine = build_engine(cfg, asr=asr)
+    return asr, engine
+
+
+def answer_injected_turn(backend, root: Path, cfg: dict, turn, asr=None,
+                         engine=None):
+    """Answer one externally injected utterance: no wake word, no ASR.
+
+    Called by the idle loop when the inject entrance queued text (POST
+    /inject); the text is routed exactly like a recognized utterance. Returns
+    the (possibly freshly built) ``(asr, engine)`` pair for reuse.
+    """
+    from ova.dialogue import _playback_from_text, _run_playback_loop
+    try:
+        asr, engine = ensure_dialogue_engine(cfg, asr, engine)
+        state = _playback_from_text(backend, root, asr, cfg, turn.text,
+                                    samples=None, engine=engine,
+                                    lang=turn.lang, route=turn.report)
+    finally:
+        turn.finish()   # release the waiting HTTP handler with the verdict
+    _run_playback_loop(backend, root, asr, cfg, state, engine=engine)
+    return asr, engine
+
+
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     cfg = resolve_config(args)
@@ -611,15 +653,21 @@ def main(argv=None) -> int:
     engine = None
     if cfg.get("dialogue"):
         try:
-            from ova.engines import build_engine
-            engine = build_engine(cfg, asr=None)
-            if engine.needs_transcript:
-                from ova.asr import LocalAsr  # lazy: only pipeline needs it up front
-                asr = LocalAsr(Path(cfg["asr_model_dir"]))
-                engine = build_engine(cfg, asr=asr)
+            asr, engine = ensure_dialogue_engine(cfg)
         except Exception as exc:  # keep the wake listener alive; retry after wake
             LOG.error("DIALOGUE_INIT_ERROR %s: %s", type(exc).__name__, exc)
             engine = None
+
+    inject_control = None
+    inject_server = None
+    if int(cfg.get("inject_port", 8090)) > 0:
+        try:
+            from ova.inject import start_inject_server
+            from ova.dialogue import INJECT
+            inject_server = start_inject_server(cfg)
+            inject_control = INJECT
+        except Exception as exc:  # the microphone path must survive without it
+            LOG.error("INJECT_INIT_ERROR %s: %s", type(exc).__name__, exc)
 
     def shutdown(*_):
         raise KeyboardInterrupt
@@ -638,9 +686,18 @@ def main(argv=None) -> int:
         while True:
             # Reopen after an acknowledgement so queued playback echo cannot
             # become a delayed wake. Systemd restarts on capture/model failure.
+            turn = None
+            wake_request = False
             with Capture(backend) as capture:
                 warmup_end = time.monotonic() + 0.5
                 while True:
+                    # Injected text and POST /wake outrank the wake word.
+                    if inject_control is not None:
+                        turn = inject_control.take()
+                        if turn is None:
+                            wake_request = inject_control.take_wake()
+                        if turn is not None or wake_request:
+                            break
                     samples = mono(capture.read(), cfg["channel"])
                     if time.monotonic() < warmup_end:
                         continue
@@ -661,16 +718,27 @@ def main(argv=None) -> int:
                                  wake_phrase, score, hits)
                         svc_event("wake", f"唤醒命中 score={score:.3f}", "ok")
                         break
+            if turn is not None:
+                # Text from outside: no acknowledgement sound, no listening.
+                try:
+                    asr, engine = answer_injected_turn(backend, responses_dir,
+                                                       cfg, turn, asr, engine)
+                except Exception as exc:  # never let one bad turn kill service
+                    LOG.error("INJECT_ERROR %s: %s", type(exc).__name__, exc)
+                model.reset()
+                LOG.info("LISTENING resumed")
+                continue
+            if wake_request:
+                # trigger_wake() already logged WAKE_TRIGGERED source=external.
+                if not cfg.get("dialogue"):
+                    LOG.warning("WAKE_TRIGGERED_IGNORED source=external "
+                                "dialogue=off")
+                    model.reset()
+                    continue
             respond(backend, responses_dir)
             if cfg.get("dialogue"):
                 try:
-                    if engine is None:
-                        from ova.engines import build_engine
-                        engine = build_engine(cfg, asr=asr)
-                    if engine.needs_transcript and asr is None:
-                        from ova.asr import LocalAsr
-                        asr = LocalAsr(Path(cfg["asr_model_dir"]))
-                        engine = build_engine(cfg, asr=asr)
+                    asr, engine = ensure_dialogue_engine(cfg, asr, engine)
                     from ova.dialogue import run_dialogue_round
                     run_dialogue_round(backend, responses_dir, asr, cfg,
                                        engine=engine)
@@ -680,6 +748,8 @@ def main(argv=None) -> int:
             LOG.info("LISTENING resumed")
     except KeyboardInterrupt:
         LOG.info("STOPPED")
+        if inject_server is not None:
+            inject_server.shutdown()
     return 0
 
 
