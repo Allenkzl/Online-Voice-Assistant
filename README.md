@@ -12,6 +12,9 @@
   `engine=e2e` 端到端（录音直发 GLM-4-Voice，音频直出）——两条链路共用唤醒/VAD/播放/打断/调试台，
   切换只改一个配置项，见 [docs/dual-engine-architecture.md](docs/dual-engine-architecture.md)
 - **调试台**：网页分环节测试（唤醒打分/听写/请求/响应/TTS/全链路时间线）
+- **外部文本入口**：`ova-wake` 内置只监听本机的 HTTP 入口（默认 `127.0.0.1:8090`），
+  展厅按键或脚本可注入一句话、或触发一次唤醒，走完全相同的路由与打断机制
+  （见 [docs/external-input-inject-2026-09-15.md](docs/external-input-inject-2026-09-15.md)）
 
 架构图与各环节说明见 [docs/architecture.md](docs/architecture.md)。
 
@@ -58,6 +61,30 @@ python3 scripts/glm_voice_poc.py tests/asr_en_smart_retail.wav
 
 切换/回退只改 `engine` 一项，不需要改代码或切分支。端到端模式的限制（无工具调用、非流式、
 访客语音整体上云）见 [docs/dual-engine-architecture.md](docs/dual-engine-architecture.md)。
+
+## 外部文本输入入口（展厅按键 / 本机脚本）
+
+除麦克风外，`ova-wake` 还提供一个只监听本机的 HTTP 入口，让展厅键盘（button-bridge 项目）
+或本机脚本把文本当成"用户说完的一句话"送进来，走**完全相同**的路由
+（三主题讲解 / 停止 / 继续 / 普通问答）与打断机制（复用 `play_interruptible()`，
+不另杀 `aplay`）。
+
+```bash
+# 文本 = 一句识别结果；正在播放时先打断当前播放再路由
+curl -s -X POST http://127.0.0.1:8090/inject -d '{"text":"介绍一下智慧零售"}'
+curl -s -X POST http://127.0.0.1:8090/inject -d '{"text":"停止"}'
+curl -s -X POST http://127.0.0.1:8090/inject -d '{"text":"今天天气怎么样"}'
+curl -s -X POST http://127.0.0.1:8090/inject -d '{"text":"introduce smart retail","lang":"en"}'
+
+# 唤醒 = 一次 Hey Jarvis 命中：进入一轮“听访客说话 → ASR → 回答”
+curl -s -X POST http://127.0.0.1:8090/wake
+
+# 返回 {"ok":true,"routed":"solution_intro|stop|continue|chat|idle","detail":"..."}
+```
+
+监听地址/端口由 `WAKE_INJECT_HOST`（默认 `127.0.0.1`）与 `WAKE_INJECT_PORT`
+（默认 `8090`，**设 `0` 关闭该入口**）控制。参数语义、日志与已知限制见
+[docs/external-input-inject-2026-09-15.md](docs/external-input-inject-2026-09-15.md)。
 
 ## 换硬件适配
 
@@ -125,6 +152,7 @@ DEPLOY_CODE=1 ENGINE=e2e ./scripts/deploy_to_robot.sh
 | `WAKE_END_SILENCE_S` | `1.2` | 判定“说完了”的静音时长 |
 | `WAKE_LISTEN_DELAY_S` | `0.6` | 应答后等回声消散再开始听 |
 | `WAKE_ASR_MODEL_DIR` | `models/asr_sense_voice_zh_en_int8` | ASR 模型目录（可指向 paraformer 中文模型目录回退） |
+| `WAKE_INJECT_HOST` / `WAKE_INJECT_PORT` | `127.0.0.1` / `8090` | 外部文本入口的监听地址/端口（`POST /inject` 注入文本、`POST /wake` 触发一轮对话）；`0` = 关闭入口 |
 | `CHAT_MODEL` | `qwen-flash` | 千问模型 |
 | `TTS_MODEL` / `TTS_VOICE` | `qwen3-tts-flash` / `Cherry` | 合成模型/音色 |
 | `HJV_EVENT_FILE` | 空 | 写事件 JSONL 供调试台时间线显示 |
@@ -149,6 +177,7 @@ docs/
 ├── wake-tuning-2026-09-10.md            # 唤醒阈值调优
 ├── showroom-intros-2026-09-10.md        # 三主题展厅讲解
 ├── barge-in-playback-2026-09-10.md      # 播放中打断
+├── external-input-inject-2026-09-15.md  # 外部文本/唤醒入口（展厅按键）
 └── reachy-demo-official-watchdog-2026-09-10.md  # 待机动作与看门狗
 ```
 

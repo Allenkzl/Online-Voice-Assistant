@@ -32,5 +32,8 @@
   "barge_in_log_interval_s": 2.0,
   "speaking_state_file": "/tmp/ova_speaking.state",
   "glm_voice_target_rms": 0.09,
-  "glm_voice_pcm_rate": 24000
+  "glm_voice_pcm_rate": 24000,
+  "inject_host": "127.0.0.1",
+  "inject_port": 8090,
+  "inject_说明": "外部文本入口（展厅键盘）：POST /inject 文本=当作用户说完一句话（停止/继续/三主题讲解/普通问答都走现有路由），POST /wake=当作用户喊了唤醒词；由 ova-wake 进程提供，只监听本机，0=关闭。见 docs/external-input-inject-2026-09-15.md"
 }

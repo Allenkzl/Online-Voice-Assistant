@@ -61,5 +61,9 @@
   "barge_in_log_interval_s": 2.0,
   "barge_in_log_interval_s_说明": "播放中监听每隔几秒记录一次 peak_score/rms；设为0可关闭",
   "speaking_state_file": "/tmp/ova_speaking.state",
-  "speaking_state_file_说明": "OVA 播放讲解/TTS 时写入的状态文件，供 Reachy Demo 调整动作频率"
+  "speaking_state_file_说明": "OVA 播放讲解/TTS 时写入的状态文件，供 Reachy Demo 调整动作频率",
+  "inject_host": "127.0.0.1",
+  "inject_host_说明": "外部文本入口监听地址（POST /inject 注入文本、POST /wake 触发一轮对话，由 ova-wake 进程提供）；只给同机按键/脚本用，保持 127.0.0.1 即可",
+  "inject_port": 8090,
+  "inject_port_说明": "外部文本入口端口；设为 0 关闭该入口（麦克风主链路不受影响）"
 }
