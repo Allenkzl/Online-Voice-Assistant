@@ -14,18 +14,19 @@
   - 使用 `pollen-robotics/reachy-mini-emotions-library` 官方动作库。
   - 只挑选相对小幅、适合展厅循环的动作：
     - `inquiring2`
-    - `enthusiastic1`
-    - `dance1`
-    - `understanding2`
     - `thoughtful2`
     - `laughing2`
     - `attentive2`
     - `displeased1`
     - `thoughtful1`
-    - `come1`
+  - 2026-09-21 起移除 `dance1` / `enthusiastic1` / `understanding2` / `come1`：本机实测这四个动作播放时 daemon 报
+    `IK error: Collision detected or head pose not achievable!`（目标位姿不可达，电机顶着 clamp 边界持续发力，
+    即现场看到的"撞自己/转向到不了的值"）。判定方法是停 demo 后逐个播放动作、对照
+    `journalctl -u reachy-mini-daemon` 的 IK error 计数（脚本思路见 git log）。剩余 6 个动作实测零 IK error。
+    官方数据集里这些动作名义上在限位内，本机不可达可能与个体装配/零位有关，如需恢复先在别的机器上对照验证。
   - 待机节奏：约 20 秒一轮。
   - 说话节奏：约 10 秒一轮，通过 `/tmp/ova_speaking.state` 判断 OVA 是否正在播放讲解或 TTS。
-  - 每个官方动作播放完后尝试回到中位，降低长时间偏头停住的概率。
+  - 每个官方动作播放完后尝试回到中位（头部+天线+`body_yaw=0` 一起回正，2026-09-21 起身体也回正，避免朝向累积漂移）。
 
 - `deploy/reachy-demo/watchdog.py`
   - 独立于 demo 进程运行，避免 demo 自己卡住时无法自救。
@@ -33,7 +34,7 @@
     - `reachy-mini-daemon` 是否 active；
     - `reachy-demo` 是否 active；
     - `http://localhost:8000/api/state/full` 是否连续可用；
-    - `/api/move/running` 是否存在超过 90 秒的卡住动作；
+    - `/api/move/running` 是否存在超过 30 秒的卡住动作（2026-09-21 由 90 秒收紧，官方动作均远短于 30 秒，尽早掐断顶限位状态）；
     - `/opt/reachy-demo/demo.log` 是否超过 180 秒没有新日志。
   - 恢复顺序：
     1. 卡住的是单个 move：先调用 `/api/move/stop`。
@@ -55,7 +56,7 @@ playing official move=<name> speaking=True
 看门狗日志：
 
 ```text
-watchdog started: interval=15s stuck_move=90s log_stale=180s
+watchdog started: interval=15s stuck_move=30s log_stale=180s
 stuck move detected; stopped=<n> keys=[...]
 restarting reachy-demo
 restarting reachy-mini-daemon and reachy-demo

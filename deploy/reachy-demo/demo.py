@@ -43,15 +43,11 @@ EMOTIONS = "pollen-robotics/reachy-mini-emotions-library"
 # motion sequences for showroom long-running use.
 MOVES = [
     "inquiring2",
-    "enthusiastic1",
-    "dance1",
-    "understanding2",
     "thoughtful2",
     "laughing2",
     "attentive2",
     "displeased1",
     "thoughtful1",
-    "come1",
 ]
 
 
@@ -152,6 +148,7 @@ def _goto(
     pitch: float = 0.0,
     roll: float = 0.0,
     antennas: tuple[float, float] | None = None,
+    body_yaw: float | None = None,
     duration: float = 1.0,
 ) -> None:
     body: dict = {
@@ -168,6 +165,8 @@ def _goto(
     }
     if antennas is not None:
         body["antennas"] = list(antennas)
+    if body_yaw is not None:
+        body["body_yaw"] = body_yaw
     _req("POST", "/api/move/goto", body, timeout=8.0)
 
 
@@ -188,7 +187,7 @@ def _head_off_center(deg: float = 8.0) -> bool:
 def _neutral(attempts: int = 3) -> bool:
     for attempt in range(attempts):
         try:
-            _goto(yaw=0.0, pitch=0.0, roll=0.0, antennas=(0.0, 0.0), duration=1.2)
+            _goto(yaw=0.0, pitch=0.0, roll=0.0, antennas=(0.0, 0.0), body_yaw=0.0, duration=1.2)
             time.sleep(1.5)
             if not _head_off_center(6.0):
                 return True
