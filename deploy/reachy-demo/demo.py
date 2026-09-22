@@ -218,13 +218,13 @@ def _wait_move_done(timeout: float = MOVE_TIMEOUT_S) -> bool:
     return False
 
 
-def _play_move(move: str) -> None:
+def _play_move(move: str, phase: str | None = None) -> None:
     _req(
         "POST",
         f"/api/move/play/recorded-move-dataset/{EMOTIONS}/{move}",
         timeout=15.0,
     )
-    log.info("playing official move=%s speaking=%s", move, _is_speaking())
+    log.info("playing official move=%s phase=%s", move, phase or _read_phase())
 
 
 def _read_phase() -> str:
