@@ -286,6 +286,20 @@ def _gaze_wander() -> None:
     )
 
 
+def _ensure_motors() -> None:
+    """1.11 launcher starts the daemon with --no-wake-up-on-start, so motors stay
+    limp until someone asks. For an unattended showroom the demo IS that someone:
+    enable torque at startup and after every daemon recovery."""
+    try:
+        status = _req("GET", "/api/motors/status", timeout=5.0)
+        if status.get("mode") in ("enabled", "MotorControlMode.Enabled"):
+            return
+        _req("POST", "/api/motors/set_mode/enabled", timeout=8.0)
+        log.info("motors enabled")
+    except Exception as exc:
+        log.warning("motor enable failed: %s", exc)
+
+
 def _recover_daemon_backend() -> None:
     log.warning("daemon backend unhealthy; requesting backend restart")
     try:
@@ -294,6 +308,7 @@ def _recover_daemon_backend() -> None:
         log.warning("daemon backend restart request failed: %s", exc)
     if not _ensure_backend():
         raise RuntimeError("daemon backend did not recover")
+    _ensure_motors()
     log.info("daemon backend recovered")
 
 
@@ -314,6 +329,7 @@ def main() -> None:
     if not _ensure_backend():
         raise SystemExit("daemon backend not ready after ~5min")
     log.info("daemon backend ready")
+    _ensure_motors()
 
     try:
         _req("POST", "/api/move/play/wake_up", timeout=15.0)
