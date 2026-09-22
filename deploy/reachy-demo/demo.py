@@ -46,6 +46,10 @@ TRACKING_ENABLED = os.environ.get("DEMO_TRACKING", "1") != "0"
 PHASE_TTL_S = float(os.environ.get("DEMO_PHASE_TTL_S", "300"))
 GAZE_INTERVAL_S = float(os.environ.get("DEMO_GAZE_INTERVAL_S", "8"))
 TRACKING_FACE_LOST_S = float(os.environ.get("DEMO_TRACKING_FACE_LOST_S", "10"))
+# Idle face-scan cadence: while nobody is around the tracker stays off and the
+# head micro-wanders; every SCAN interval it briefly re-enables tracking just
+# to look for a face ("peek"), so approaching visitors are noticed.
+SCAN_INTERVAL_S = float(os.environ.get("DEMO_SCAN_INTERVAL_S", "15"))
 
 EMOTIONS = "pollen-robotics/reachy-mini-emotions-library"
 
@@ -355,6 +359,7 @@ def main() -> None:
     tracking_on = False
     face_lost_at: float | None = None
     last_gaze = 0.0
+    last_scan = 0.0
     last_heartbeat = 0.0
     while True:
         phase = _read_phase()
@@ -406,13 +411,16 @@ def main() -> None:
                             _tracking(False)
                             tracking_on = False
                             face_lost_at = None
-                elif _face_detected():
-                    if _tracking(True):
-                        tracking_on = True
-                        face_lost_at = None
-                elif time.monotonic() - last_gaze > GAZE_INTERVAL_S:
-                    _gaze_wander()
-                    last_gaze = time.monotonic()
+                else:
+                    now = time.monotonic()
+                    if now - last_scan > SCAN_INTERVAL_S:
+                        last_scan = now
+                        if _tracking(True):
+                            tracking_on = True
+                            face_lost_at = now
+                    elif now - last_gaze > GAZE_INTERVAL_S:
+                        _gaze_wander()
+                        last_gaze = time.monotonic()
             # listening/thinking: one-shot behaviour already applied above
             failures = 0
         except (TimeoutError, urllib.error.URLError, RuntimeError) as exc:
