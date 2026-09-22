@@ -607,9 +607,10 @@ def answer_injected_turn(backend, root: Path, cfg: dict, turn, asr=None,
     /inject); the text is routed exactly like a recognized utterance. Returns
     the (possibly freshly built) ``(asr, engine)`` pair for reuse.
     """
-    from ova.dialogue import _playback_from_text, _run_playback_loop
+    from ova.dialogue import _playback_from_text, _run_playback_loop, _write_motion_phase
     try:
         asr, engine = ensure_dialogue_engine(cfg, asr, engine)
+        _write_motion_phase(cfg, "thinking")
         state = _playback_from_text(backend, root, asr, cfg, turn.text,
                                     samples=None, engine=engine,
                                     lang=turn.lang, route=turn.report)
