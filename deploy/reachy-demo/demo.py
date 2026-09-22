@@ -355,10 +355,18 @@ def main() -> None:
     tracking_on = False
     face_lost_at: float | None = None
     last_gaze = 0.0
+    last_heartbeat = 0.0
     while True:
         phase = _read_phase()
         started_at = time.monotonic()
         try:
+            if time.monotonic() - last_heartbeat > 60.0:
+                # Watchdog supervision needs a log heartbeat; idle phases can be
+                # silent for minutes otherwise and get needlessly restarted.
+                log.info(
+                    "heartbeat phase=%s tracking=%s", phase, tracking_on
+                )
+                last_heartbeat = time.monotonic()
             if phase != last_phase:
                 log.info("phase %s -> %s", last_phase, phase)
                 if phase == "listening":
