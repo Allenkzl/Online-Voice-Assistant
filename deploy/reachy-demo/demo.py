@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
-"""Reachy Mini showroom ambient motion using official recorded moves.
+"""Reachy Mini showroom motion, phase-driven (motion v2).
 
-The motion itself is executed by the Reachy Mini daemon HTTP API. This script
-only chooses official low-amplitude recorded moves, keeps a conservative
-cadence, and writes enough log heartbeat for the watchdog to supervise it.
+OVA publishes a dialogue phase (idle/listening/thinking/speaking) to a state
+file; this loop maps phases to behaviours on the daemon HTTP API:
+listening watches the visitor via the daemon's native face tracking,
+thinking glances aside, speaking keeps a restrained recorded-move accent
+loop, idle micro-wanders its gaze and turns to look at whoever shows up.
+Set DEMO_TRACKING=0 to disable face tracking and fall back to moves only.
 """
 
 from __future__ import annotations
@@ -35,6 +38,14 @@ SPEAKING_STATE_TTL_S = float(os.environ.get("DEMO_SPEAKING_STATE_TTL_S", "300"))
 MOVE_TIMEOUT_S = float(os.environ.get("DEMO_MOVE_TIMEOUT_S", "50"))
 STUCK_MOVE_WAIT_S = float(os.environ.get("DEMO_STUCK_MOVE_WAIT_S", "65"))
 FAILURE_LIMIT = int(os.environ.get("DEMO_FAILURE_LIMIT", "3"))
+
+# Motion v2: perception-first behaviours. listening/idle-attention use the
+# daemon's native face tracking (measured +1.3% daemon CPU on CM4); set
+# DEMO_TRACKING=0 to fall back to recorded moves only (v1 behaviour).
+TRACKING_ENABLED = os.environ.get("DEMO_TRACKING", "1") != "0"
+PHASE_TTL_S = float(os.environ.get("DEMO_PHASE_TTL_S", "300"))
+GAZE_INTERVAL_S = float(os.environ.get("DEMO_GAZE_INTERVAL_S", "8"))
+TRACKING_FACE_LOST_S = float(os.environ.get("DEMO_TRACKING_FACE_LOST_S", "10"))
 
 EMOTIONS = "pollen-robotics/reachy-mini-emotions-library"
 
@@ -216,16 +227,63 @@ def _play_move(move: str) -> None:
     log.info("playing official move=%s speaking=%s", move, _is_speaking())
 
 
-def _is_speaking() -> bool:
+def _read_phase() -> str:
+    """Current motion phase from OVA's state file; stale or broken reads -> idle."""
     try:
-        raw = open(SPEAKING_STATE_FILE, encoding="utf-8").read()
-        state = json.loads(raw)
+        state = json.loads(open(SPEAKING_STATE_FILE, encoding="utf-8").read())
+    except Exception:
+        return "idle"
+    updated_at = float(state.get("updated_at", 0.0))
+    if time.time() - updated_at > PHASE_TTL_S:
+        return "idle"
+    phase = state.get("phase")
+    if phase in ("listening", "thinking", "speaking", "idle"):
+        return phase
+    # legacy bool format written by older OVA builds
+    return "speaking" if state.get("speaking") else "idle"
+
+
+def _is_speaking() -> bool:
+    return _read_phase() == "speaking"
+
+
+def _tracking(on: bool) -> bool:
+    """Enable/disable the daemon's native face tracking; False when unavailable."""
+    if not TRACKING_ENABLED:
+        return False
+    try:
+        if on:
+            resp = _req(
+                "POST", "/api/media/tracking/enable", {"weight": 1.0}, timeout=8.0
+            )
+            return bool(resp.get("enabled"))
+        _req("POST", "/api/media/tracking/disable", timeout=8.0)
+        return True
+    except Exception as exc:
+        log.warning("tracking %s failed: %s", "enable" if on else "disable", exc)
+        return False
+
+
+def _face_detected() -> bool:
+    try:
+        resp = _req("GET", "/api/media/tracking/face", timeout=5.0)
+        return bool((resp.get("face_target") or {}).get("detected"))
     except Exception:
         return False
-    if not state.get("speaking"):
-        return False
-    updated_at = float(state.get("updated_at", 0.0))
-    return time.time() - updated_at <= SPEAKING_STATE_TTL_S
+
+
+def _gaze_wander() -> None:
+    """Idle micro-gaze: small absolute targets, hard-bounded well inside limits."""
+    _goto(
+        yaw=random.uniform(-0.05, 0.05),
+        pitch=random.uniform(-0.02, 0.03),
+        roll=random.uniform(-0.03, 0.03),
+        antennas=(
+            random.uniform(-0.06, 0.06),
+            random.uniform(-0.06, 0.06),
+        ),
+        duration=1.4,
+    )
 
 
 def _recover_daemon_backend() -> None:
@@ -268,36 +326,89 @@ def main() -> None:
 
     failures = 0
     log.info(
-        "official motion loop: %d moves, idle=%.0fs speaking=%.0fs",
+        "motion v2 loop: tracking=%s moves=%d idle=%.0fs speaking=%.0fs",
+        TRACKING_ENABLED,
         len(MOVES),
         IDLE_INTERVAL_S,
         SPEAKING_INTERVAL_S,
     )
+    deck = list(MOVES)
+    random.shuffle(deck)
+    deck_i = 0
+    last_phase = "idle"
+    tracking_on = False
+    face_lost_at: float | None = None
+    last_gaze = 0.0
     while True:
-        deck = list(MOVES)
-        random.shuffle(deck)
-        for move in deck:
-            interval = SPEAKING_INTERVAL_S if _is_speaking() else IDLE_INTERVAL_S
-            started_at = time.monotonic()
-            try:
+        phase = _read_phase()
+        started_at = time.monotonic()
+        try:
+            if phase != last_phase:
+                log.info("phase %s -> %s", last_phase, phase)
+                if phase == "listening":
+                    if not _tracking(True):
+                        tracking_on = False
+                        _run_one_move("attentive2")
+                    else:
+                        tracking_on = True
+                    face_lost_at = None
+                elif phase == "thinking":
+                    if tracking_on:
+                        _tracking(False)
+                        tracking_on = False
+                    _goto(yaw=0.06, pitch=0.02, duration=0.8)
+                elif phase == "speaking":
+                    if tracking_on:
+                        _tracking(False)
+                        tracking_on = False
+                    _neutral()
+                last_phase = phase
+
+            if phase == "speaking":
+                move = deck[deck_i % len(deck)]
+                deck_i += 1
+                if deck_i % len(deck) == 0:
+                    random.shuffle(deck)
                 _run_one_move(move)
+            elif phase == "idle":
+                if tracking_on:
+                    if _face_detected():
+                        face_lost_at = None
+                    else:
+                        now = time.monotonic()
+                        if face_lost_at is None:
+                            face_lost_at = now
+                        elif now - face_lost_at > TRACKING_FACE_LOST_S:
+                            _tracking(False)
+                            tracking_on = False
+                            face_lost_at = None
+                elif _face_detected():
+                    if _tracking(True):
+                        tracking_on = True
+                        face_lost_at = None
+                elif time.monotonic() - last_gaze > GAZE_INTERVAL_S:
+                    _gaze_wander()
+                    last_gaze = time.monotonic()
+            # listening/thinking: one-shot behaviour already applied above
+            failures = 0
+        except (TimeoutError, urllib.error.URLError, RuntimeError) as exc:
+            failures += 1
+            log.warning(
+                "motion cycle failed (%d/%d): %s",
+                failures,
+                FAILURE_LIMIT,
+                exc,
+                exc_info=True,
+            )
+            if failures >= FAILURE_LIMIT:
+                if tracking_on:
+                    tracking_on = False
+                _recover_daemon_backend()
                 failures = 0
-            except (TimeoutError, urllib.error.URLError, RuntimeError) as exc:
-                failures += 1
-                log.warning(
-                    "official move %s failed (%d/%d): %s",
-                    move,
-                    failures,
-                    FAILURE_LIMIT,
-                    exc,
-                    exc_info=True,
-                )
-                if failures >= FAILURE_LIMIT:
-                    _recover_daemon_backend()
-                    failures = 0
-            elapsed = time.monotonic() - started_at
-            if elapsed < interval:
-                time.sleep(interval - elapsed)
+        interval = SPEAKING_INTERVAL_S if phase == "speaking" else 1.0
+        elapsed = time.monotonic() - started_at
+        if elapsed < interval:
+            time.sleep(interval - elapsed)
 
 
 if __name__ == "__main__":

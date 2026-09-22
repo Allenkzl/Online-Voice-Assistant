@@ -272,13 +272,14 @@ def _slice_wav(path: Path, start_s: float) -> Path:
     return tmp_path
 
 
-def _set_speaking_state(cfg: dict, speaking: bool, name: str = "") -> None:
+def _write_motion_phase(cfg: dict, phase: str, name: str = "") -> None:
     path = cfg.get("speaking_state_file")
     if not path:
         return
     try:
         payload = {
-            "speaking": speaking,
+            "phase": phase,
+            "speaking": phase == "speaking",  # legacy bool for older readers
             "name": name,
             "updated_at": time.time(),
         }
@@ -288,6 +289,10 @@ def _set_speaking_state(cfg: dict, speaking: bool, name: str = "") -> None:
         )
     except Exception as exc:  # noqa: BLE001 - state hints must not break speech
         LOG.warning("SPEAKING_STATE_ERROR %s: %s", type(exc).__name__, exc)
+
+
+def _set_speaking_state(cfg: dict, speaking: bool, name: str = "") -> None:
+    _write_motion_phase(cfg, "speaking" if speaking else "idle", name)
 
 
 def _barge_monitor(backend, cfg: dict, stop_event: threading.Event,
@@ -385,8 +390,13 @@ def play_interruptible(backend, state: PlaybackState, cfg: dict) -> PlaybackResu
         ["aplay", "-q", "-D", backend.output_device, str(play_path)],
     )
     start = time.monotonic()
+    last_beat = start
     try:
         while proc.poll() is None:
+            if time.monotonic() - last_beat > 30.0:
+                # 长讲解/TTS 期间刷新状态时间戳，动作层依赖它判断 phase 未过期
+                _set_speaking_state(cfg, True, state.name)
+                last_beat = time.monotonic()
             if INJECT.interrupted():
                 proc.terminate()
                 try:
@@ -469,6 +479,7 @@ def listen_question(backend, channel=0, end_silence_s=1.2,
 
 def listen_command_after_barge_in(backend, asr: LocalAsr, cfg: dict) -> BargeCommand:
     """Record the short follow-up command; keeps the audio for e2e engines."""
+    _write_motion_phase(cfg, "listening")
     samples = listen_question(
         backend,
         channel=cfg.get("channel", 0),
@@ -704,6 +715,7 @@ def run_dialogue_round(backend, root: Path, asr: LocalAsr, cfg: dict,
     channel = cfg.get("channel", 0)
     samples = None
     text = ""
+    _write_motion_phase(cfg, "listening")
     for attempt in (1, 2):
         samples = listen_question(
             backend, channel=channel,
@@ -732,6 +744,7 @@ def run_dialogue_round(backend, root: Path, asr: LocalAsr, cfg: dict,
     else:
         return
 
+    _write_motion_phase(cfg, "thinking")
     state = _playback_from_text(backend, root, asr, cfg, text,
                                 samples=samples, engine=engine)
     _run_playback_loop(backend, root, asr, cfg, state, engine=engine)
