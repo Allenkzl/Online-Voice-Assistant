@@ -20,12 +20,19 @@ class ReachyDemoMotionTests(unittest.TestCase):
     def run_phases(self, phases, tracking_result=True):
         events = []
         sleeps = 0
+        reads = 0
 
         def sleep(_seconds):
             nonlocal sleeps
             sleeps += 1
-            if sleeps > len(phases):  # startup wake sleep + one per loop
+            if reads >= len(phases):
                 raise EndLoop
+
+        def read_phase():
+            nonlocal reads
+            phase = phases[min(reads, len(phases) - 1)]
+            reads += 1
+            return phase
 
         def tracking(on):
             events.append(("tracking", on))
@@ -39,7 +46,7 @@ class ReachyDemoMotionTests(unittest.TestCase):
             patch.object(demo, "_neutral", side_effect=lambda: events.append(("neutral",))),
             patch.object(demo, "_run_one_move", side_effect=lambda name: events.append(("move", name))),
             patch.object(demo, "_tracking", side_effect=tracking),
-            patch.object(demo, "_read_phase", side_effect=phases),
+            patch.object(demo, "_read_phase", side_effect=read_phase),
             patch.object(demo.time, "sleep", side_effect=sleep),
         ):
             with self.assertRaises(EndLoop):
@@ -50,9 +57,17 @@ class ReachyDemoMotionTests(unittest.TestCase):
         # main() starts with tracking_on=False, though the daemon may already
         # have tracking active from a separate API call.
         events = self.run_phases(["speaking"])
-        self.assertEqual(events[0:2], [("neutral",), ("tracking", False)])
-        self.assertEqual(events[2][0], "neutral")
-        self.assertEqual(events[3][0], "move")
+        self.assertEqual(events[0], ("tracking", False))
+        self.assertEqual(events[1], ("neutral",))
+        self.assertEqual(events[2], ("tracking", False))
+        self.assertEqual(events[3][0], "neutral")
+        self.assertEqual(events[4][0], "move")
+
+    def test_startup_pauses_tracking_and_idle_resumes_it_immediately(self):
+        events = self.run_phases(["idle"])
+        self.assertEqual(events[0], ("tracking", False))
+        self.assertEqual(events[1], ("neutral",))
+        self.assertEqual(events[2], ("tracking", True))
 
     def test_idle_restores_face_tracking_after_speaking(self):
         events = self.run_phases(["speaking", "idle"])

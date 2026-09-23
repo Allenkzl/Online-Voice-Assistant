@@ -255,7 +255,7 @@ def _is_speaking() -> bool:
 
 def _tracking(on: bool) -> bool:
     """Enable/disable the daemon's native face tracking; False when unavailable."""
-    if not TRACKING_ENABLED:
+    if on and not TRACKING_ENABLED:
         return False
     try:
         if on:
@@ -347,11 +347,14 @@ def main() -> None:
     _ensure_motors()
 
     try:
-        _req("POST", "/api/move/play/wake_up", timeout=15.0)
-        log.info("wake_up requested")
-        time.sleep(4.0)
-        _neutral()
-        log.info("neutral pose set")
+        if _pause_tracking_for_motion():
+            _req("POST", "/api/move/play/wake_up", timeout=15.0)
+            log.info("wake_up requested")
+            time.sleep(4.0)
+            _neutral()
+            log.info("neutral pose set")
+        else:
+            log.warning("skipping startup pose: tracking could not be paused")
     except Exception:
         log.warning("wake/neutral failed", exc_info=True)
 
@@ -370,7 +373,9 @@ def main() -> None:
     tracking_on = False
     face_lost_at: float | None = None
     last_gaze = 0.0
-    last_scan = 0.0
+    # Resume face-follow on the first idle cycle, including immediately after
+    # service startup when the daemon may have retained a tracking session.
+    last_scan = time.monotonic() - SCAN_INTERVAL_S
     last_heartbeat = 0.0
     while True:
         phase = _read_phase()
