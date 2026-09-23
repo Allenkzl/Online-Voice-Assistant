@@ -32,8 +32,9 @@ demo.py v2 每轮读 phase（300s 过期回 idle，容忍 OVA 重启/异常路�
 
 ## 开关与降级
 
-- `DEMO_TRACKING=0`：一键退回 v1 动作行为（tracking 调用全部短路）
-- tracking 开关失败静默降级 listening→`attentive2`，不影响对话链路
+- `DEMO_TRACKING=0`：不在 listening/idle 主动启用人脸跟随；thinking/speaking 仍会显式关闭 daemon tracking，避免与头部动作冲突。此开关不会阻止其他入口打开 tracking。
+- 从任意相位进入 thinking / speaking 都主动关 daemon tracking，不依赖脚本内的 `tracking_on` 缓存；这覆盖了手动开启跟随后直接按键触发回答的情况。关闭失败时跳过该相位的头部动作，speaking 阶段逐轮重试，不让动作与跟随同时争夺头部。
+- tracking 开启失败时 listening 降级播 `attentive2`，不影响对话链路
 - 所有 goto 幅度硬上限 ±0.05 rad；watchdog 原样兜底
 
 ## Phase 0 实测数据（2026-09-22）

@@ -6,7 +6,9 @@ file; this loop maps phases to behaviours on the daemon HTTP API:
 listening watches the visitor via the daemon's native face tracking,
 thinking glances aside, speaking keeps a restrained recorded-move accent
 loop, idle micro-wanders its gaze and turns to look at whoever shows up.
-Set DEMO_TRACKING=0 to disable face tracking and fall back to moves only.
+Set DEMO_TRACKING=0 to disable this script's face-follow behaviour. Tracking
+is still explicitly paused before a head pose or recorded move, including when
+it was enabled elsewhere in the daemon.
 """
 
 from __future__ import annotations
@@ -41,7 +43,7 @@ FAILURE_LIMIT = int(os.environ.get("DEMO_FAILURE_LIMIT", "3"))
 
 # Motion v2: perception-first behaviours. listening/idle-attention use the
 # daemon's native face tracking (measured +1.3% daemon CPU on CM4); set
-# DEMO_TRACKING=0 to fall back to recorded moves only (v1 behaviour).
+# DEMO_TRACKING=0 to skip face-follow behaviour outside motion phases.
 TRACKING_ENABLED = os.environ.get("DEMO_TRACKING", "1") != "0"
 PHASE_TTL_S = float(os.environ.get("DEMO_PHASE_TTL_S", "300"))
 GAZE_INTERVAL_S = float(os.environ.get("DEMO_GAZE_INTERVAL_S", "8"))
@@ -268,6 +270,15 @@ def _tracking(on: bool) -> bool:
         return False
 
 
+def _pause_tracking_for_motion() -> bool:
+    """Release the head before a pose or recorded move.
+
+    The tracker can have been enabled outside this process, so the local
+    ``tracking_on`` bookkeeping is not evidence that it is actually off.
+    """
+    return _tracking(False)
+
+
 def _face_detected() -> bool:
     try:
         resp = _req("GET", "/api/media/tracking/face", timeout=5.0)
@@ -382,23 +393,34 @@ def main() -> None:
                         tracking_on = True
                     face_lost_at = None
                 elif phase == "thinking":
-                    if tracking_on:
-                        _tracking(False)
+                    if _pause_tracking_for_motion():
                         tracking_on = False
-                    _goto(yaw=0.06, pitch=0.02, duration=0.8)
+                        _goto(yaw=0.06, pitch=0.02, duration=0.8)
+                    else:
+                        tracking_on = True
+                        log.warning("skipping thinking pose: tracking could not be paused")
                 elif phase == "speaking":
-                    if tracking_on:
-                        _tracking(False)
+                    if _pause_tracking_for_motion():
                         tracking_on = False
-                    _neutral()
+                        _neutral()
+                    else:
+                        tracking_on = True
+                        log.warning("skipping speaking move: tracking could not be paused")
                 last_phase = phase
 
             if phase == "speaking":
-                move = deck[deck_i % len(deck)]
-                deck_i += 1
-                if deck_i % len(deck) == 0:
-                    random.shuffle(deck)
-                _run_one_move(move)
+                if tracking_on:
+                    if _pause_tracking_for_motion():
+                        tracking_on = False
+                        _neutral()
+                    else:
+                        log.warning("skipping speaking move: tracking still active")
+                if not tracking_on:
+                    move = deck[deck_i % len(deck)]
+                    deck_i += 1
+                    if deck_i % len(deck) == 0:
+                        random.shuffle(deck)
+                    _run_one_move(move)
             elif phase == "idle":
                 if tracking_on:
                     if _face_detected():
