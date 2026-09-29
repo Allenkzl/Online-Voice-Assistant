@@ -65,20 +65,38 @@ curl -s http://127.0.0.1:8090/lang                            # 读当前语言
 | 环节 | 行为 |
 |---|---|
 | 讲解选版 | 显式 `lang`（`POST /inject {...,"lang":"en"}`）优先；否则用**现场切换过的语言**（状态文件，或特意配成非默认的 `dialogue_lang`）；都没指定时**仍按关键词语言**（`介绍一下智慧零售`→中文、`introduce smart retail`→英文），与语音链路的历史行为一致 |
-| LLM 回答（`engine=pipeline`） | `reply_lang` 透传给引擎；`en` 时 system prompt 在中文人设后追加 `Answer in English, conversational, ≤60 words, no markdown or lists.`，`zh`/未设定保持原中文口径 |
-| 天气工具轮 | 复用同一份 system message，所以工具查完后的总结也是同一语言 |
+| LLM 回答（`engine=pipeline`） | `reply_lang` 透传给引擎；`en` 时 system prompt 换成**独立英文人设** `EN_SYSTEM_PROMPT`（不再在中文人设后追加英文句，见下文“为什么换人设”），`zh`/未设定保持原中文口径 byte for byte |
+| 英文兜底 | EN 模式下模型仍回中文（中文占比 ≥ `LANG_RETRY_CJK_RATIO=0.2`）时，`ensure_reply_language()` 追加一轮 assistant/user 提醒重问一次；只重试一次，失败就用重试结果，日志 `LANG_RETRY` |
+| 天气工具轮 | 与对话共用同一语言：英文模式查询 wttr.in 的英文天气并给 LLM 英文事实，中文模式保持原中文模板；工具失败提示也跟随当前语言 |
 | 语音链路 | 与注入文本共用 `_playback_from_text()`，所以"切到英文后说中文关键词"同样会播英文讲解 |
+| 固定兜底音 | `dialogue.play_asset()` 按当前或注入请求显式语言选择 `fallback/*_en.wav`；找不到英文文件会记录警告并播放中文原件。没听清、换个问题、网络异常和可选“好的”缓冲音都有英文录音 |
 | `engine=e2e`（GLM-4-Voice） | **不跟随**：音频进音频出，语言由模型自己决定（见已知限制） |
 | TTS | 音色不参与（仍是单一音色 `TTS_VOICE`，默认 Cherry），只切文字语言 |
 
+### 为什么换人设（2026-09-29）
+
+原实现 `en = SYSTEM_PROMPT + " Answer in English…"`：中文人设里那句
+“**用中文口语化回答**”和追加的英文指令互相矛盾，qwen-flash 会跟着**提问语言**走，
+结果英文只在“用户说英文”时生效——展厅里用中文问句就会得到中文回答，旋钮切英文形同虚设。
+真机实测（同一个 `ask_with_weather`）：
+
+| 提示词 | “介绍一下智慧空间” | “你好，你是谁？” |
+| --- | --- | --- |
+| 旧（中文人设 + 追加英文句） | 中文 | 中文 |
+| 新（独立英文人设） | 英文 | 英文 |
+
+对应改动：`ova/llm.py` 新增 `EN_SYSTEM_PROMPT`（可用 `QWEN_SYSTEM_PROMPT_EN` 覆盖，
+保留 `query_weather` 强制调用要求），`system_prompt("en")` 返回它；
+`ova/engines/pipeline.py` 增加 `ensure_reply_language()` 兜底。
+实测提示词加强后仍非 100%（中文产品名 + 中文问句偶发中文回答），所以兜底这层不能省。
+
 ## 持久化位置与"重启是否保留"
 
-- 状态文件：`dialogue_lang_file`，默认 `/tmp/ova_lang.state`，内容就是一行 `zh` 或 `en`。
-- `ova-wake` **进程重启**：保留（文件在，`current()` 接着读）。
-- **整机重启**：`/tmp` 被清空 → 回到 `dialogue_lang`（默认 `zh`）。
-  想跨整机重启保留，把 `dialogue_lang_file` 指到持久路径（例如 `/var/lib/ova/lang.state`）。
+- 状态文件默认：`dialogue_lang_file=/tmp/ova_lang.state`，内容一行 `zh` 或 `en`。
+- 展区 Reachy CM4 的 `/etc/ova.env` 已设置 `WAKE_DIALOGUE_LANG_FILE=/var/lib/ova/lang.state`，保留此前的 `en` 状态；OPA 与 KeyMesh 都通过 `/lang` 读取，语音服务或整机重启后仍在。
+- 其他设备未设置覆盖项时，`ova-wake` **进程重启**保留 `/tmp` 文件，**整机重启**回到默认 `zh`。
 - 读不到文件、文件是目录、内容是乱码（例如被别的程序覆盖）：一律回退到 `dialogue_lang`，
-  **不抛异常**，只记一条 debug 日志；写不进去（只读 `/tmp`、父目录不存在等）只记 `LANG_STATE_ERROR` warning，
+  **不抛异常**，只记一条 debug 日志；写不进去（只读磁盘、父目录不存在等）只记 `LANG_STATE_ERROR` warning，
   HTTP 仍按切换结果回答。
 
 ## 参数
@@ -106,10 +124,11 @@ curl -s http://127.0.0.1:8090/lang                            # 读当前语言
 - `src/ova/dialogue.py`
   - `_playback_from_text()`：开头解析 `effective = lang or ova.lang.current(cfg)` 并打 `DIALOGUE_LANG`；
     讲解分支用 `lang or ova.lang.chosen(cfg)` 选变体，聊天分支传 `{**cfg, "reply_lang": effective}`。
-- `src/ova/llm.py`：`system_prompt(lang=None)`（`SYSTEM_PROMPT` 仍是基座，`QWEN_SYSTEM_PROMPT` 仍可覆盖；
-  `en` 追加英文指令）；`chat()` 行为不变。
-- `src/ova/engines/pipeline.py`：`ask_with_weather(text, lang=None)` 用 `system_prompt(lang)`；
+  - `play_asset()`：所有固定兜底音都按本轮语言选择 `*_en.wav`；注入请求的显式语言优先，缺失英文文件回退中文。
+- `src/ova/llm.py`：`system_prompt(lang=None)` 在英文时返回独立 `EN_SYSTEM_PROMPT`（可用 `QWEN_SYSTEM_PROMPT_EN` 覆盖），中文继续用 `SYSTEM_PROMPT`（`QWEN_SYSTEM_PROMPT` 可覆盖）；`chat()` 行为不变。
+- `src/ova/engines/pipeline.py`：`ask_with_weather(text, lang=None)` 用 `system_prompt(lang)`，并把该语言传给天气工具；
   `PipelineEngine.respond()` 从 `cfg["reply_lang"]` 取语言（`QWEN_REPLY` 日志带 `lang=`）。
+- `src/ova/tools.py`：`query_weather(city_slug, lang=...)` 中英文分别用对应的 wttr.in 模板，单独运行的调试台仍默认为中文。
 - `src/ova/wake.py`：`DEFAULTS` / `ENV_MAP` 加 `dialogue_lang`、`dialogue_lang_file`。
 - `config/hardware/reachy-mini.json`、`config/example.json`：记录两个新参数。
 - `tests/test_lang.py`、`tests/test_inject.py`、`tests/test_engines.py`：见下。
@@ -136,7 +155,7 @@ LANG_STATE_ERROR path=/tmp/ova_lang.state ...     # 写不进去（只是 warnin
 4. 切到英文后问天气：`curl -s -X POST :8090/inject -d '{"text":"今天天气怎么样"}'`
    → 回答是英文（日志 `QWEN_REPLY lang=en`）。
 5. 打断/停止不受影响：`{"text":"停止"}`、`{"text":"stop"}` 仍走原路由。
-6. 重启服务（`systemctl restart ova-wake`）后 `GET /lang` 仍是 `en`；重启机器后回到 `zh`。
+6. 重启服务（`systemctl restart ova-wake`）后 `GET /lang` 仍是 `en`；CM4 使用 `/var/lib/ova/lang.state`，整机重启也保留；默认配置 `/tmp` 在整机重启后回到 `zh`。
 7. `curl -s -X POST :8090/lang -d '{"lang":"jp"}'` → 400，语言不变。
 
 ## 已知限制
