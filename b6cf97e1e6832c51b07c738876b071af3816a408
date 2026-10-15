@@ -1,7 +1,0 @@
-WIP: 设备现场讲解稿改写，id / name / audio_* 三者未对齐，勿当定稿。
-- id=smart_retail 仍指向 smart_retail_{zh,en}.wav，但 name_zh/en 已改为 智慧空间 / Smart Space
-- id=smart_space 仍指向 smart_space_{zh,en}.wav，但 name_zh/en 已改为 智慧社区 / Smart Community
-- id=emergency_response 仍指向 emergency_response_{zh,en}.wav，但 name_zh/en 已改为 智慧乡野 / Smart Countryside
-- aliases 半更新：智慧空间/空间区 落到 smart_retail；smart_space 只剩 智慧社区/社区区；应急救灾一族落到 emergency_response
-- 音频已按新稿重制但文件名未改（见 chore(audio) commit）
-需 owner 定稿：重命名 id / 调整或重录 audio_* / 收敛 aliases，之后才谈代码与按键绑定。
