@@ -12,6 +12,11 @@
 #   * ova-wake runs as User=pollen, which is what makes the reachymini_* ALSA
 #     aliases (defined in pollen's ~/.asoundrc) visible to the service
 #   * pollen has passwordless sudo
+#   * 第 2 步 rsync -az --delete 覆盖设备 src/ scripts/ config/ docs/ deploy/ tests/
+#     （只排除 __pycache__/*.pyc）：设备上这些目录里未进 fork 的文件会被删除
+#     （含 *.bak-* 备份）；assets/ models/ tools/ 不在同步面。第 1 步先打
+#     backups/pre-deploy-*.tar.gz，跑前先把设备本地改动搬回 fork。
+#   * WAKE_THRESHOLD 未显式传入时沿用设备 /etc/ova.env 现值，不再盲写 0.28。
 set -eu
 
 ROBOT="${ROBOT:-pollen@reachy-mini.local}"
@@ -21,7 +26,7 @@ ENGINE="${ENGINE:-e2e}"
 DEPLOY_CODE="${DEPLOY_CODE:-1}"
 DEPLOY_MODELS="${DEPLOY_MODELS:-1}"
 GITHUB_PROXY="${GITHUB_PROXY:-}"
-WAKE_THRESHOLD="${WAKE_THRESHOLD:-0.28}"
+WAKE_THRESHOLD="${WAKE_THRESHOLD:-}"
 WAKE_HITS="${WAKE_HITS:-4}"
 WAKE_ACK_BEFORE_REPLY="${WAKE_ACK_BEFORE_REPLY:-0}"
 WAKE_VAD_BACKEND="${WAKE_VAD_BACKEND:-silero}"
@@ -33,6 +38,14 @@ LOCAL="$(cd "$(dirname "$0")/.." && pwd)"
 
 SSH="ssh -i $SSH_KEY -o ConnectTimeout=10 -o BatchMode=yes $ROBOT"
 RSH="ssh -i $SSH_KEY -o ConnectTimeout=10 -o BatchMode=yes"
+
+# 唤醒阈值：0.28 是早期调试默认，盲写会覆盖展厅现场的 0.50
+# （见 hall/devices/hall-reachy-mini-cm4.md）。未显式传入时沿用设备现值。
+if [ -z "$WAKE_THRESHOLD" ]; then
+  WAKE_THRESHOLD=$($SSH 'sudo grep -E "^WAKE_THRESHOLD=" /etc/ova.env 2>/dev/null | cut -d= -f2' || true)
+  WAKE_THRESHOLD="${WAKE_THRESHOLD:-0.50}"
+  echo "WAKE_THRESHOLD 未显式传入，沿用设备现值：$WAKE_THRESHOLD"
+fi
 
 echo "=== 0) 体检 ==="
 $SSH 'sudo grep -E "^WAKE_(ENGINE|DIALOGUE|ASR_MODEL_DIR|THRESHOLD|HITS|ACK_BEFORE_REPLY|VAD_BACKEND|VAD_MODEL_PATH|VAD_THRESHOLD|VAD_MIN_SPEECH_S)=" /etc/ova.env 2>/dev/null || true

@@ -2,36 +2,68 @@
   "solutions": [
     {
       "id": "smart_retail",
-      "name_zh": "智慧零售",
-      "name_en": "Smart Retail",
-      "aliases_zh": ["智慧零售", "智能零售", "零售区"],
-      "aliases_en": ["smart retail", "retail area", "retail zone"],
+      "name_zh": "智慧空间",
+      "name_en": "Smart Space",
+      "aliases_zh": [
+        "智慧空间",
+        "空间区",
+        "智慧零售",
+        "智能零售",
+        "零售区"
+      ],
+      "aliases_en": [
+        "smart space",
+        "space zone",
+        "smart retail",
+        "retail area",
+        "retail zone"
+      ],
       "audio_zh": "assets/solutions/smart_retail_zh.wav",
       "audio_en": "assets/solutions/smart_retail_en.wav",
-      "text_zh": "欢迎来到智慧零售区。你眼前的 AI 摄像头不只负责录像——它用视觉模型实时识别人流，生成热力图，还会盯着货架自动盘点商品；旁边这位 Watcher 是仓管智能体，你可以直接开口问库存，也能用它完成入库和出库。再配合 reTerminal DM 智能零售终端，点一下屏幕就能看到客流和库存变化。\n这套看人、看货、管库存的能力并不只限于门店——同样可以迁移到便利店、连锁商超、仓库等任何需要客流分析和物品盘点的空间。",
-      "text_en": "Welcome to the Smart Retail area. The AI camera in front of you does more than record video—it uses vision models to track store traffic in real time, generate heatmaps, and watch the shelves for automatic inventory counting. This is Watcher, our voice-enabled warehouse agent: you can ask it about stock levels or use it to handle check-in and check-out. Paired with the reTerminal DM smart retail terminal, one tap gives you a live view of foot traffic and inventory. By connecting people counting, product recognition, and stock management, the store moves from ‘checking recordings afterward’ to ‘getting answers on the spot.’ And this isn’t limited to retail—the same approach works just as well in convenience stores, chain supermarkets, and warehouses."
+      "text_zh": "欢迎来到智慧空间区。这里重点展示的是实时门店视觉分析：AI 摄像头通过视觉模型识别人流、统计客流并生成热力图，屏幕上可直观看到人流分布和区域热度。可用于门店、园区、商业空间、连锁商超和展馆等场景的客流分析，为动线规划、商品陈列和招商布局提供数据参考。\n右侧是智能仓管，支持货架商品自动盘点，以及通过 Watcher 语音查询库存、完成入库和出库操作；配合 reTerminal DM 智能零售终端，可直观呈现客流和库存变化，减少人工盘点和录入，提升库存管理效率。\n这套看人、管库存的能力并不只限于门店——同样可以迁移到连锁商超、仓库、园区、商圈等任何需要客流分析和物品盘点的空间。",
+      "text_en": "Welcome to the Smart Space zone. The main focus here is real-time visual analytics for retail. The AI camera uses computer vision to detect and count visitors and generate heatmaps. The screen shows how people move through space and which areas attract the most traffic. These insights guide layout, merchandising, and leasing decisions in stores, malls, business parks, and exhibition venues.\n\nOn the right, the smart inventory supports automated shelf counts. Watcher handles stock queries and logs incoming and outgoing goods by voice, while reTerminal DM displays foot traffic and inventory updates. These inventory tools also work in warehouses and stockrooms, reducing manual counting and data entry.\n\nThese capabilities can extend to retail chains, warehouses, business parks, and shopping districts—wherever visitor analytics or inventory tracking is needed."
     },
     {
       "id": "smart_space",
-      "name_zh": "智慧空间",
-      "name_en": "Smart Space",
-      "aliases_zh": ["智慧空间", "空间区"],
-      "aliases_en": ["smart space", "space zone", "smart space zone"],
+      "name_zh": "智慧社区",
+      "name_en": "Smart Community",
+      "aliases_zh": [
+        "智慧社区",
+        "社区区"
+      ],
+      "aliases_en": [
+        "smart community",
+        "community zone"
+      ],
       "audio_zh": "assets/solutions/smart_space_zh.wav",
       "audio_en": "assets/solutions/smart_space_en.wav",
-      "text_zh": "智慧空间区，是主动照护和智慧家居的呈现。核心是这台 reCamera Pro：它通过 AI 视觉模型识别跌倒等异常行为，一发现情况就触发语音询问，并把现场信息同步给家人或护工；旁边的家居控制智能体，靠开放协议可以把不同品牌的灯和面板接进来；reTerminal E1003 则像一块真实的家庭墙控，点击就能调亮度、切场景。\n同样的思路，可以迁移到社区、养老机构、酒店客房、办公室、公寓和学校等任何需要主动看护与联动控制的空间。",
-      "text_en": "Now we’re in the Smart Space zone, focused on proactive care and smart home automation. At the center is this reCamera Pro: it uses an AI vision model to detect unusual situations like a fall, then immediately triggers a voice check and shares the live context with family members or caregivers. Beside it is a home automation agent built around Home Assistant—its open integrations let lights and panels from different brands work together in one system. Over here, the reTerminal E1003 functions as a wall-mounted home control panel: tap it to adjust brightness or switch scenes. So this isn’t only about one smart device; it’s a care chain—detect, ask, notify, respond. The same approach transfers to communities, senior-care facilities, hotel rooms, offices, apartments, and schools."
+      "text_zh": "现在来到智慧社区区。这里展示的是主动照护与智慧家居，帮助运营方更及时地发现异常，更便捷地管理空间内的设备。\n核心设备 reCamera Pro 通过 AI 视觉模型识别跌倒等异常行为，发现异常后触发语音询问，并将现场信息同步给家人或护工，帮助相关人员及时确认和处理。旁边的家居控制智能体，通过开放协议接入不同品牌的灯光和控制面板；reTerminal E1003 则作为操作入口，支持调节灯光亮度、查看温湿度等环境信息。\n其中，主动照护能力可应用于居家养老、社区照护、养老机构和康养中心；环境监测与联动控制可应用于酒店客房、长租公寓、办公空间和学校。根据场景组合部署，可以缩短异常响应时间，减轻日常照护与设备管理的负担。",
+      "text_en": "Next is the Smart Community zone, featuring proactive care and smart home control.\n\nAt the center is reCamera Pro. It uses AI vision to detect falls and other unusual events, triggers a voice check-in, and shares information from the scene with family members or caregivers for follow-up.\n\nAlongside it, the smart home control agent connects lighting and control panels from different brands through open protocols. The reTerminal E1003 provides lighting controls and displays environmental readings such as temperature and humidity.\n\nApplications range from home and community care to senior living, care facilities, hotels, apartments, offices, and schools. Depending on the application, these capabilities can be combined to shorten response times and simplify day-to-day care and facility management."
     },
     {
       "id": "emergency_response",
-      "name_zh": "应急救灾",
-      "name_en": "Emergency Response",
-      "aliases_zh": ["应急救灾", "应急救援", "救灾区", "应急区"],
-      "aliases_en": ["emergency response", "disaster relief", "emergency rescue", "emergency zone"],
+      "name_zh": "智慧乡野",
+      "name_en": "Smart Countryside",
+      "aliases_zh": [
+        "智慧乡野",
+        "乡野区",
+        "应急救灾",
+        "应急救援",
+        "救灾区",
+        "应急区"
+      ],
+      "aliases_en": [
+        "smart countryside",
+        "countryside zone",
+        "emergency response",
+        "disaster relief",
+        "emergency rescue",
+        "emergency zone"
+      ],
       "audio_zh": "assets/solutions/emergency_response_zh.wav",
       "audio_en": "assets/solutions/emergency_response_en.wav",
-      "text_zh": "应急救灾区，这一站看的是户外环境。真正难的不是缺传感器，而是现场没有网络，也无人值守。气象站和多种环境传感器自主采集温湿度、土壤、水位等数据，通过 LoRa 在无网环境下长距离回传，数值一旦出现异常就主动告警。\n这套无网感知能力可以迁移到农田、山地、河流、工地、矿区和园区边界等任何网络条件差、又需要远程监测的区域。",
-      "text_en": "Here in the Emergency Response zone, the focus is the outdoor environment. The real challenge isn’t missing sensors—it’s that these sites often have no network and no one on duty. The weather station and environmental sensors collect temperature, humidity, soil, and water-level data on their own, transmitting it over LoRa even without coverage. When a reading crosses the threshold, the system raises an alert automatically. This off-grid sensing capability can be applied anywhere with poor connectivity and remote-monitoring needs—farmland, mountains, rivers, construction sites, mines, and campus perimeters."
+      "text_zh": "现在来到智慧乡野区。户外监测常见的难点，是现场网络覆盖不足、监测点分散，人工巡检成本高，也难以及时发现异常。\n这里的气象站和环境传感器，可以持续采集气象、土壤、水位等数据，通过自部署的 LoRa 网络进行远距离传输，降低对现场公网覆盖的依赖。当监测数据超出设定阈值时，系统会自动触发预警，为管理人员安排巡检和处置提供依据。\n对企业来说，这套方案能够减少重复巡检，降低布网和监测成本，帮助更早发现环境风险。这套无网感知能力，可以迁移到农田、山地、河流、工地、矿区和园区边界等网络条件受限、又需要持续远程监测的区域。",
+      "text_en": "Now we’re at Smart Countryside, designed for outdoor sites with limited connectivity and costly manual inspections.\n\nWeather stations and sensors continuously track weather, soil conditions, and water levels. A locally deployed LoRa network carries the data over long distances, reducing reliance on public network coverage. Readings outside preset limits automatically trigger alerts.\n\nApplications include farmland, mountainous areas, rivers, construction sites, mines, and business park perimeters. Continuous monitoring reduces routine site visits and network costs, while providing earlier warning of environmental risks."
     }
   ]
 }

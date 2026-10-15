@@ -695,6 +695,7 @@ def main(argv=None) -> int:
             # become a delayed wake. Systemd restarts on capture/model failure.
             turn = None
             wake_request = False
+            hits = 0  # require N consecutive hits within THIS listening session
             with Capture(backend) as capture:
                 warmup_end = time.monotonic() + 0.5
                 while True:
@@ -742,7 +743,11 @@ def main(argv=None) -> int:
                                 "dialogue=off")
                     model.reset()
                     continue
-            respond(backend, responses_dir)
+            # External /wake follows a button's spoken prompt. Avoid a second
+            # acknowledgement before opening the microphone; physical wake
+            # still gets its normal response sound.
+            if not wake_request:
+                respond(backend, responses_dir)
             if cfg.get("dialogue"):
                 try:
                     asr, engine = ensure_dialogue_engine(cfg, asr, engine)
