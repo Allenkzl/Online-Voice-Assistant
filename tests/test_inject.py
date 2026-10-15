@@ -632,7 +632,7 @@ def test_wake_main_loop_serves_the_entrance():
         assert lines == ["smart_retail_zh.wav",          # inject: intro (cut short)
                          "asr_zh_smart_retail.wav",      # inject: engine reply
                          "smart_retail_zh.wav"]          # /wake round routes ASR text
-        assert played == ["response.wav"]                # only the wake chime
+        assert played == []  # external /wake follows the button's own prompt
         assert any("INJECT_INTERRUPT name=智慧零售讲解" in msg for msg in logs)
         assert any("WAKE_TRIGGERED source=external" in msg for msg in logs)
         assert any("INJECT_READY host=127.0.0.1 port=%d lang=zh" % port in msg
