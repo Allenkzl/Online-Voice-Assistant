@@ -125,16 +125,22 @@ dsnoop/dmix 入口、Silero VAD、SenseVoice int8 ASR、对话模式默认开）
 ## 部署到机器人（Reachy Mini）
 
 ```bash
-# 一键部署 + 切引擎（幂等；自动备份代码与 /etc/ova.env，不会覆盖 models/assets）
+# 一键部署 + 切引擎（幂等；自动备份代码与 /etc/ova.env，不会覆盖 models/assets/tools）
 ZHIPUAI_API_KEY=xxx ./scripts/deploy_to_robot.sh              # 切到端到端 e2e
 ENGINE=pipeline ./scripts/deploy_to_robot.sh                  # 回退半在线 pipeline
 
 # 只同步代码不改开关
 DEPLOY_CODE=1 ENGINE=e2e ./scripts/deploy_to_robot.sh
 
-# 默认会写入展厅当前试运行参数：WAKE_THRESHOLD=0.28、WAKE_HITS=4、
-# WAKE_ACK_BEFORE_REPLY=0、WAKE_VAD_BACKEND=silero、
-# WAKE_ASR_MODEL_DIR=models/asr_sense_voice_zh_en_int8；可用同名环境变量临时覆盖。
+# WAKE_THRESHOLD 不再盲写：未显式传入时沿用设备 /etc/ova.env 现值（展厅现场 0.50），
+# 显式 WAKE_THRESHOLD=… 才覆盖。其余会写入 WAKE_HITS=4、WAKE_ACK_BEFORE_REPLY=0、
+# WAKE_VAD_BACKEND=silero、WAKE_ASR_MODEL_DIR=models/asr_sense_voice_zh_en_int8；
+# 可用同名环境变量临时覆盖。
+#
+# 注意：第 2 步 rsync -az --delete 覆盖设备 src/ scripts/ config/ docs/ deploy/ tests/
+# （仅排除 __pycache__/*.pyc）；assets/ models/ tools/ 不在同步面。设备上这些目录里
+# 未进 fork 的文件会被删除——含设备现场版 config/solutions.json；跑前先把设备改动
+# 搬回 fork，或确认第 1 步 backups/pre-deploy-*.tar.gz 可恢复。
 ```
 
 线上要点（详见 [PROJECT_HISTORY.md §1](docs/PROJECT_HISTORY.md)）：
@@ -143,7 +149,7 @@ DEPLOY_CODE=1 ENGINE=e2e ./scripts/deploy_to_robot.sh
 |---|---|
 | 项目路径 / 服务 | `/home/pollen/ova`；`ova-wake`、`ova-console`（:8080） |
 | 配置位置 | **没有 config.json**，全部在 `/etc/ova.env`（600） |
-| 部署方式 | 目录非 git 仓库 → 用 rsync 覆盖（脚本已封装） |
+| 部署方式 | 目录非 git 仓库 → 用 `rsync -az --delete` 覆盖 `src/ scripts/ config/ docs/ deploy/ tests/`（脚本已封装；`assets/` `models/` `tools/` 不动） |
 | 运行用户 | `pollen`（因此能用 `~/.asoundrc` 里的 `reachymini_*` 设备别名） |
 | 回退 | `ENGINE=pipeline ./scripts/deploy_to_robot.sh`（10 秒） |
 

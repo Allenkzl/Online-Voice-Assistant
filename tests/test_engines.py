@@ -26,7 +26,9 @@ os.environ.setdefault("OVA_HOME", str(ROOT))
 from ova.engines import EngineError, build_engine          # noqa: E402
 from ova.engines import pipeline as pipe                   # noqa: E402
 from ova.engines.base import ENGINE_ALIASES                # noqa: E402
-from ova.llm import SYSTEM_PROMPT, CloudError, system_prompt  # noqa: E402
+from ova.llm import (  # noqa: E402
+    EN_SYSTEM_PROMPT, SYSTEM_PROMPT, CloudError, system_prompt,
+)
 
 
 @contextlib.contextmanager
@@ -98,6 +100,36 @@ def test_clip_cuts_at_sentence_boundary():
     assert out.endswith("。")
 
 
+def test_clip_english_does_not_append_chinese_punctuation():
+    text = "A reply without any sentence boundary that is deliberately long " * 4
+    assert pipe.clip(text, maxlen=40).endswith(".")
+
+
+def test_weather_tool_follows_dialogue_language_without_network():
+    from ova import tools
+    from urllib.parse import parse_qs, urlsplit
+
+    seen = []
+
+    class Response:
+        def __enter__(self):
+            return self
+        def __exit__(self, *exc):
+            pass
+        def read(self):
+            return b"Hangzhou: Clear, +23C, humidity 70%, wind 5km/h"
+
+    def urlopen(url, timeout=12.0):
+        seen.append(parse_qs(urlsplit(url).query))
+        return Response()
+
+    with patch(tools.urllib.request, urlopen=urlopen):
+        assert "humidity" in tools.query_weather("Hangzhou", lang="en")
+        assert "杭州" in tools.query_weather("Hangzhou")
+    assert seen[0]["lang"] == ["en"]
+    assert seen[1]["lang"] == ["zh"]
+
+
 def test_ask_with_weather_plain_reply():
     with patch(pipe, chat_once=lambda messages, tools=None, timeout=30.0: {
             "content": "杭州今天小雨。"}):
@@ -116,7 +148,8 @@ def test_ask_with_weather_runs_tool_round():
                              "arguments": '{"city_slug": "Hangzhou"}'}}]}
         return {"content": "杭州 23 度，小雨。"}
 
-    with patch(pipe, chat_once=fake_chat, query_weather=lambda slug: f"{slug}: 小雨 23C"):
+    with patch(pipe, chat_once=fake_chat,
+               query_weather=lambda slug, lang=None: f"{slug}: 小雨 23C"):
         reply = pipe.ask_with_weather("杭州天气怎么样")
     assert reply == "杭州 23 度，小雨。"
     assert len(calls) == 2
@@ -137,14 +170,17 @@ def test_ask_with_weather_empty_reply_raises():
 # --- reply language ----------------------------------------------------------
 
 def test_system_prompt_follows_the_reply_language():
-    """中文口径原样保留；英文时追加一条英文指令（旋钮长按切到 English）。"""
+    """中文口径原样保留；英文用独立英文人设（旋钮长按切到 English）。"""
     assert system_prompt(None) == SYSTEM_PROMPT
     assert system_prompt("zh") == SYSTEM_PROMPT
     assert system_prompt(" 中文 ") == SYSTEM_PROMPT
-    assert system_prompt("en").startswith(SYSTEM_PROMPT)
-    assert "Answer in English" in system_prompt("en")
-    assert "Answer in English" in system_prompt("ENGLISH")   # 大小写/别名
-    assert "Answer in English" in system_prompt("英文")
+    assert system_prompt("en") == EN_SYSTEM_PROMPT
+    for alias in ("en", "ENGLISH", "英文"):                # 大小写/别名
+        prompt = system_prompt(alias)
+        assert "Always answer in English" in prompt
+        assert "用中文" not in prompt                       # 不再和中文指令并存
+        assert "query_weather" in prompt                    # 天气工具要求仍在
+    assert "query_weather" in system_prompt(None)           # 中文分支不受影响
 
 
 def test_ask_with_weather_uses_the_reply_language():
@@ -159,12 +195,57 @@ def test_ask_with_weather_uses_the_reply_language():
                              "arguments": '{"city_slug": "Hangzhou"}'}}]}
         return {"content": "Hangzhou, 23C, light rain."}
 
+    weather_langs = []
     with patch(pipe, chat_once=fake_chat,
-               query_weather=lambda slug: f"{slug}: light rain 23C"):
+               query_weather=lambda slug, lang=None: weather_langs.append(lang) or f"{slug}: light rain 23C"):
         reply = pipe.ask_with_weather("杭州天气怎么样", "en")
+    assert weather_langs == ["en"]
     assert reply == "Hangzhou, 23C, light rain."
-    assert "Answer in English" in calls[0][0]["content"]
+    assert calls[0][0]["content"] == EN_SYSTEM_PROMPT   # 英文人设（含天气要求）
     assert calls[1][0] == calls[0][0]        # 工具轮复用同一份 system message
+
+
+def test_english_reply_is_retried_when_it_comes_back_in_chinese():
+    """EN 模式下模型仍回中文时，自动再要一次英文（只重试一次）。"""
+    calls = []
+
+    def fake_chat(messages, tools=None, timeout=30.0):
+        calls.append(messages)
+        if len(calls) == 1:
+            return {"content": "智慧空间是融合物联网的智能环境。"}
+        return {"content": "The Smart Space is an intelligent environment."}
+
+    with patch(pipe, chat_once=fake_chat):
+        reply = pipe.ask_with_weather("介绍一下智慧空间", "en")
+    assert reply == "The Smart Space is an intelligent environment."
+    assert len(calls) == 2
+    assert calls[1][-1]["content"] == pipe.LANG_RETRY_MESSAGE
+    assert calls[1][-2] == {"role": "assistant",
+                            "content": "智慧空间是融合物联网的智能环境。"}
+
+
+def test_language_guard_leaves_zh_and_mostly_english_alone():
+    """中文模式不重问；英文回答里夹一个中文词也不算跑偏。"""
+    calls = []
+
+    def zh_chat(messages, tools=None, timeout=30.0):
+        calls.append(messages)
+        return {"content": "你好呀，有什么我可以帮你的吗？"}
+
+    with patch(pipe, chat_once=zh_chat):
+        assert pipe.ask_with_weather("你好", "zh").startswith("你好呀")
+    assert len(calls) == 1                  # zh 模式不回炉
+
+    calls.clear()
+
+    def en_chat(messages, tools=None, timeout=30.0):
+        calls.append(messages)
+        return {"content": "The Smart Space (智慧空间) uses IoT and AI."}
+
+    with patch(pipe, chat_once=en_chat):
+        reply = pipe.ask_with_weather("介绍一下智慧空间", "en")
+    assert reply == "The Smart Space (智慧空间) uses IoT and AI."
+    assert len(calls) == 1                  # 中文占比低，不触发重试
 
 
 # --- pipeline respond --------------------------------------------------------
@@ -237,7 +318,7 @@ def test_respond_hands_the_dialogue_language_to_the_chat_call():
                                  {"reply_lang": "zh"})
 
     assert english.text == "Sure." and chinese.text == "Sure."
-    assert "Answer in English" in seen[0][0]["content"]
+    assert seen[0][0]["content"] == EN_SYSTEM_PROMPT   # 英文人设
     assert seen[1][0]["content"] == SYSTEM_PROMPT      # 中文仍是原口径
     for reply in (english, chinese):        # 同毫秒的两个回复可能同名 tmp 文件
         reply.audio_path.unlink(missing_ok=True)
