@@ -440,7 +440,7 @@ def test_inject_during_playback_interrupts_and_routes_the_new_text():
     assert second["detail"] == "emergency_response:zh"
     assert len(lines) == 2, lines
     assert "smart_retail_zh.wav" in lines[0] and "emergency_response_zh.wav" in lines[1]
-    assert any("INJECT_INTERRUPT name=智慧零售讲解" in msg for msg in logs)
+    assert any("INJECT_INTERRUPT name=智慧空间讲解" in msg for msg in logs)
     assert any("INJECT_NEXT text=介绍一下应急救灾" in msg for msg in logs)
     assert engine.calls == []
 
@@ -507,7 +507,7 @@ def test_post_wake_triggers_one_dialogue_round():
                                        engine=engine)
     assert status == 200 and body == {"ok": True}
     assert any("WAKE_TRIGGERED source=external" in msg for msg in logs)
-    assert [s.name for s in states] == ["智慧零售讲解"]   # the round really ran
+    assert [s.name for s in states] == ["智慧空间讲解"]   # the round really ran
 
 
 def test_wake_main_loop_serves_the_entrance():
@@ -633,7 +633,7 @@ def test_wake_main_loop_serves_the_entrance():
                          "asr_zh_smart_retail.wav",      # inject: engine reply
                          "smart_retail_zh.wav"]          # /wake round routes ASR text
         assert played == []  # external /wake follows the button's own prompt
-        assert any("INJECT_INTERRUPT name=智慧零售讲解" in msg for msg in logs)
+        assert any("INJECT_INTERRUPT name=智慧空间讲解" in msg for msg in logs)
         assert any("WAKE_TRIGGERED source=external" in msg for msg in logs)
         assert any("INJECT_READY host=127.0.0.1 port=%d lang=zh" % port in msg
                    for msg in logs)
