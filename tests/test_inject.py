@@ -440,7 +440,7 @@ def test_inject_during_playback_interrupts_and_routes_the_new_text():
     assert second["detail"] == "emergency_response:zh"
     assert len(lines) == 2, lines
     assert "smart_retail_zh.wav" in lines[0] and "emergency_response_zh.wav" in lines[1]
-    assert any("INJECT_INTERRUPT name=智慧零售讲解" in msg for msg in logs)
+    assert any("INJECT_INTERRUPT name=智慧空间讲解" in msg for msg in logs)
     assert any("INJECT_NEXT text=介绍一下应急救灾" in msg for msg in logs)
     assert engine.calls == []
 
@@ -507,7 +507,67 @@ def test_post_wake_triggers_one_dialogue_round():
                                        engine=engine)
     assert status == 200 and body == {"ok": True}
     assert any("WAKE_TRIGGERED source=external" in msg for msg in logs)
-    assert [s.name for s in states] == ["智慧零售讲解"]   # the round really ran
+    assert [s.name for s in states] == ["智慧空间讲解"]   # the round really ran
+
+
+def test_inject_aborts_a_pending_listen_and_routes_at_once():
+    """聆听等待中的注入立即收尾本轮：不播兜底，交回主循环马上路由。"""
+    backend, engine = FakeBackend(), FakeEngine()
+    dlg.INJECT.clear()
+    with temp_cfg() as cfg, capture_logs() as logs:
+        def listening_with_inject(*args, stop_check=None, **kwargs):
+            # 模拟 capture_utterance：注入先到达，随后按帧检查 stop_check 提前退出
+            dlg.INJECT.push(InjectedTurn(text="介绍一下智慧零售", lang="zh"))
+            deadline = time.monotonic() + 2.0
+            while time.monotonic() < deadline:
+                if stop_check is not None and stop_check():
+                    return None
+                time.sleep(0.01)
+            return None
+
+        states = []
+        t0 = time.monotonic()
+        with patch(dlg,
+                   listen_question=listening_with_inject,
+                   _run_playback_loop=lambda b, r, a, c, state, **k:
+                   states.append(state)):
+            dlg.run_dialogue_round(backend, ASSETS, asr=FakeAsr(), cfg=cfg,
+                                   engine=engine)
+        elapsed = time.monotonic() - t0
+
+    assert elapsed < 0.5, f"轮次应被立即中止，实际用了 {elapsed:.2f}s"
+    assert backend.played_names() == []            # 没播兜底
+    assert states == []                            # 没进入回答
+    assert any("LISTEN_INJECT_PENDING attempt=1" in msg for msg in logs)
+    assert not any("EMPTY_LISTEN" in msg for msg in logs)
+    assert dlg.INJECT.interrupted() is True        # 文本仍在队列里等主循环
+
+    # 主循环下一拍真 take → answer_injected_turn：同一张纸条被马上路由（播预制讲解）
+    with temp_cfg() as cfg, fake_aplay(0.5) as log, no_microphone():
+        turn = dlg.INJECT.take()
+        assert turn is not None and turn.text == "介绍一下智慧零售"
+        wake.answer_injected_turn(backend, ASSETS, cfg, turn, FakeAsr(), engine)
+        assert turn.done.is_set()
+        assert turn.report.get("routed") == "solution_intro"
+        assert "smart_retail_zh.wav" in aplay_lines(log)[0]
+
+
+def test_inject_aborts_the_barge_in_command_window():
+    """打断后的指令窗口里到来注入：中止等待、不误报“未听到新指令”。"""
+    backend = FakeBackend()
+    dlg.INJECT.clear()
+    with temp_cfg() as cfg, capture_logs() as logs:
+        def listening_with_inject(*args, **kwargs):
+            dlg.INJECT.push(InjectedTurn(text="介绍一下智慧零售"))
+            return None
+
+        with patch(dlg, listen_question=listening_with_inject):
+            command = dlg.listen_command_after_barge_in(backend, FakeAsr(), cfg)
+
+    assert command.samples is None and not command.text
+    assert any("BARGE_COMMAND_ABORT_INJECT" in msg for msg in logs)
+    assert not any("BARGE_COMMAND_EMPTY" in msg for msg in logs)
+    assert dlg.INJECT.take() is not None          # 文本留给主循环
 
 
 def test_wake_main_loop_serves_the_entrance():
@@ -633,7 +693,7 @@ def test_wake_main_loop_serves_the_entrance():
                          "asr_zh_smart_retail.wav",      # inject: engine reply
                          "smart_retail_zh.wav"]          # /wake round routes ASR text
         assert played == []  # external /wake follows the button's own prompt
-        assert any("INJECT_INTERRUPT name=智慧零售讲解" in msg for msg in logs)
+        assert any("INJECT_INTERRUPT name=智慧空间讲解" in msg for msg in logs)
         assert any("WAKE_TRIGGERED source=external" in msg for msg in logs)
         assert any("INJECT_READY host=127.0.0.1 port=%d lang=zh" % port in msg
                    for msg in logs)

@@ -40,6 +40,8 @@ POST /wake {} → 唤醒标志 ─────────┘        ├─ 停�
 1. 文本入队，并请求停止正在播放的音频（等价于一次 barge-in，`aplay` 被终止）；
 2. 由**主循环**（待机时）或**播放循环**（播放中）取出文本，调
    `_playback_from_text()` 路由，随后 `_run_playback_loop()` 播放结果；
+   若文本到达时一轮对话正在**聆听等待**（或打断后的短指令窗口），聆听按帧
+   提前退出、把文本交回主循环马上路由（日志 `LISTEN_INJECT_PENDING`，不再等该轮结束）；
 3. 响应里回报路由结果，`routed` 取值：
 
 | `routed` | 含义 |
@@ -90,6 +92,9 @@ curl -s -X POST http://127.0.0.1:8090/inject -d '{"text":"introduce smart retail
   - `play_interruptible()`：主循环里除麦克风打断外，新增检查外部打断；命中即 `proc.terminate()`，
     返回 `PlaybackResult(external=True)`（与麦克风打断区分）。
   - `_run_playback_loop()`：外部打断时先取注入队列里的文本直接路由，不再听麦克风；队列为空才走原路径。
+  - `listen_question()` / `run_dialogue_round()` / `listen_command_after_barge_in()`：聆听等待接入
+    `capture_utterance()` 的 `stop_check`——队列里有注入时按帧提前退出（日志 `LISTEN_INJECT_PENDING` /
+    `BARGE_COMMAND_ABORT_INJECT`），把文本交回主循环马上路由，本轮不再播兜底。
   - `_playback_from_text()`：新增 `lang` 与 `route`（回报 `routed`/`detail`）；`samples is None`
     但文本存在时允许 `engine.respond(None, text, cfg)`——按键注入的普通问答靠这一条。
 - `src/ova/wake.py`
@@ -109,6 +114,7 @@ SOLUTION_INTRO id=smart_retail lang=zh file=...  # 命中主题（语音/注入�
 INJECT_ROUTED routed=solution_intro detail=smart_retail:zh
 INJECT_INTERRUPT name=智慧零售讲解 elapsed=3.42s  # 注入打断了在播音频
 INJECT_NEXT text=介绍一下应急救灾 lang=-          # 播放循环取走下一条注入
+LISTEN_INJECT_PENDING attempt=1 hand over         # 聆听等待被排队注入中止（交回主循环）
 BARGE_STOP text=停止                               # 停止词路由
 WAKE_TRIGGERED source=external                    # POST /wake 收到
 ```
@@ -124,13 +130,17 @@ WAKE_TRIGGERED source=external                    # POST /wake 收到
 4. inject `{"text":"今天天气怎么样"}` → 引擎回答（验证无音频文本也能问答）。
 5. `curl -X POST :8090/wake` → 进入一轮对话开始听麦克风（日志 `LISTENING`）。
 6. 回归：现场唤醒词、喊 `Hey Jarvis` 打断、注入后麦克风仍能正常录音。
+7. 聆听等待中注入：`POST /wake` 进入听麦克风后立刻注入一个主题 → 讲解约 1 秒内起播
+   （日志 `LISTEN_INJECT_PENDING` + `SOLUTION_INTRO`），不等本轮结束。
 
 ## 已知限制
 
 - **不替代麦克风打断机制**：`barge_in=false` 时 `play_interruptible()` 走的是同步
   `backend.play_file()`，此时注入只能等当前播放结束才生效（展厅配置 `barge_in=true`）。
 - **输入不做语言识别的兜底**：`routed` 完全由文本关键词决定；文本不含主题词就一定落到引擎（会走云）。
-- **不抢占"听麦克风"阶段**：注入文本若在一轮对话的 VAD 录音期间到达，要等这一轮结束后才被取走。
+- **聆听等待可被注入中止（2026-10-23 起）**：聆听等待中的注入按帧提前退出并交回主循环立即路由，
+  不再等轮次结束（旧限制"不抢占听麦克风阶段"已移除）；ASR/TTS 生成期间到来的注入仍要等进入播放后
+  才被打断（播放打断路径，不变）。
 - **`继续` 需要上一段播放**：待机时注入"继续"没有断点，会当普通问题交给引擎（与语音路径一致）。
 - **`/inject` 是同步等待路由结果**：普通问答要等引擎（LLM+TTS）返回后才响应；超过 12s 先返回
   `{"routed":"idle","detail":"queued, ..."}`，文本仍在队列里继续处理。

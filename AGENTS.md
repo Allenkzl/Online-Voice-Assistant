@@ -82,7 +82,8 @@
   停止 / 继续 / 三主题预制讲解 / 普通问答）与 `POST /wake`（= 一次唤醒命中，进入一轮"听访客说话 → 回答"）。
   监听地址/端口由 `WAKE_INJECT_HOST`（默认 `127.0.0.1`）/ `WAKE_INJECT_PORT`（默认 `8090`，**`0` = 关闭**）控制；
   只在 `ova-wake` 进程内起 daemon 线程，不新增第三方依赖。播放中注入先打断当前播放
-  （复用 `play_interruptible()` 已有的终止路径，不另杀 `aplay`），注入触发的播放同样写 `speaking_state_file`。
+  （复用 `play_interruptible()` 已有的终止路径，不另杀 `aplay`）；聆听等待中的注入按帧中止等待、
+  交回主循环立即路由（不等轮次结束），注入触发的播放同样写 `speaking_state_file`。
   设计与已知限制见 `docs/external-input-inject-2026-09-15.md`。
 - **对话语言（持久切换）**：`POST /lang`（body `{}`/`{"toggle":true}` = 中英互切，`{"lang":"en"}` = 直设，
   非法值 400）与 `GET /lang` 由同一个 `ova-wake` HTTP 入口提供；当前语言存在
@@ -115,3 +116,4 @@
 | 2026-09-15 | `main` | 新增外部文本输入入口：`ova-wake` 内置 `POST /inject`（文本当识别结果，复用停止/继续/三主题讲解/普通问答路由，播放中注入先打断当前播放）与 `POST /wake`（当唤醒命中起一轮对话）；`WAKE_INJECT_PORT` 默认 8090、`0`=关闭，仅监听本机，无新依赖。 |
 | 2026-09-15 | `main` | 新增持久对话语言切换：展厅旋钮长按 → `POST /lang`（中↔英，`GET /lang` 读当前值），状态存 `dialogue_lang_file`（默认 `/tmp/ova_lang.state`），回退 `dialogue_lang`（默认 `zh`）；切换后讲解选版与 `pipeline` 的 LLM 回答语言都跟随（`reply_lang` → `llm.system_prompt()`），TTS 音色与 `e2e` 引擎不变。新增 `src/ova/lang.py` 与 `tests/test_lang.py`。 |
 | 2026-09-29 | `feat/motion-v2` | 修英文切换不生效：`en` 改用独立英文人设 `EN_SYSTEM_PROMPT`（旧的“中文人设 + 追加英文句”自相矛盾，模型跟着提问语言走，中文问句一律中文答）；`pipeline.ensure_reply_language()` 增加中文回答自动重问一次（`LANG_RETRY`，中文占比阈值 0.2）。真机已验证中文提问 3/3 英文回答，zh 口径 byte 不变。见 `docs/dialogue-language-switch-2026-09-15.md`。 |
+| 2026-10-23 | `fix/inject-during-listen` | 外部注入可中止聆听等待：一轮对话的 VAD 录音期间到达注入时，聆听按帧提前退出并交回主循环立即路由（`LISTEN_INJECT_PENDING`），不再等轮次结束；打断后的短指令窗口同样让位（`BARGE_COMMAND_ABORT_INJECT`）；`listen_question()` 透传 `capture_utterance()` 的 `stop_check`。见 `docs/external-input-inject-2026-09-15.md`。 |
