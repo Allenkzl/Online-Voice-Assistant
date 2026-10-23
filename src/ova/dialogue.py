@@ -135,7 +135,7 @@ class InjectControl:
             return turn
 
     def interrupted(self) -> bool:
-        """True while injected text is waiting for the playback loop."""
+        """True while injected text is queued and no loop has taken it yet."""
         return self._interrupt.is_set()
 
     def trigger_wake(self) -> None:
@@ -165,8 +165,10 @@ def inject_text(text: str, lang: str | None = None,
     """Route one external utterance exactly like a recognized one.
 
     The text is queued for the wake main loop (idle) or for the playback loop
-    (playing: the current audio stops first). Blocks until a loop has taken the
-    turn and returns its routing verdict.
+    (playing: the current audio stops first); while a dialogue round is
+    listening (or in its barge-in command window) the queued turn aborts the
+    wait so the main loop can route it at once. Blocks until a loop has taken
+    the turn and returns its routing verdict.
     """
     turn = InjectedTurn(text=str(text or "").strip(), lang=lang)
     LOG.info("INJECT_TEXT text=%s lang=%s", turn.text, turn.lang or "-")
@@ -462,20 +464,29 @@ def play_interruptible(backend, state: PlaybackState, cfg: dict) -> PlaybackResu
 
 
 def listen_question(backend, channel=0, end_silence_s=1.2,
-                    max_s=15.0, min_speech_s=0.35, delay_s=0.8):
-    """Record one question with the echo-safe VAD (see capture_utterance)."""
+                    max_s=15.0, min_speech_s=0.35, delay_s=0.8,
+                    stop_check=None):
+    """Record one question with the echo-safe VAD (see capture_utterance).
+
+    ``stop_check`` aborts the wait as soon as it returns True (a queued
+    external inject); the caller decides what to do with the aborted round.
+    """
     t0 = time.monotonic()
     backend_cfg = getattr(backend, "cfg", {}) or {}
     samples = capture_utterance(backend, channel=channel,
                                 end_silence_s=end_silence_s, max_s=max_s,
                                 min_speech_s=min_speech_s, delay_s=delay_s,
+                                stop_check=stop_check,
                                 vad_backend=backend_cfg.get("vad_backend", "energy"),
                                 vad_model_path=backend_cfg.get(
                                     "vad_model_path", "models/silero_vad.onnx"),
                                 vad_threshold=backend_cfg.get("vad_threshold", 0.50),
                                 vad_buffer_s=backend_cfg.get("vad_buffer_s", 30.0))
     if samples is None:
-        LOG.info("VAD no speech")
+        if stop_check is not None and stop_check():
+            LOG.info("VAD stopped: injected text pending")
+        else:
+            LOG.info("VAD no speech")
     else:
         LOG.info("VAD_END speech_s=%.2fs", len(samples) / 16000)
     return samples
@@ -491,10 +502,15 @@ def listen_command_after_barge_in(backend, asr: LocalAsr, cfg: dict) -> BargeCom
         max_s=cfg.get("barge_in_max_command_s", 6.0),
         min_speech_s=0.2,
         delay_s=cfg.get("barge_in_listen_delay_s", 0.2),
+        stop_check=INJECT.interrupted,
     )
     if samples is None:
-        LOG.info("BARGE_COMMAND_EMPTY")
-        svc_event("dialog", "打断后未听到新指令，回到待唤醒", "warn")
+        if INJECT.interrupted():
+            # 队列里有注入：让位，主循环马上路由它。
+            LOG.info("BARGE_COMMAND_ABORT_INJECT")
+        else:
+            LOG.info("BARGE_COMMAND_EMPTY")
+            svc_event("dialog", "打断后未听到新指令，回到待唤醒", "warn")
         return BargeCommand()
     try:
         command_asr = _get_command_asr(asr, cfg)
@@ -714,7 +730,11 @@ def _run_playback_loop(
 
 def run_dialogue_round(backend, root: Path, asr: LocalAsr, cfg: dict,
                        engine: Engine | None = None) -> None:
-    """One wake->question->answer cycle. Never raises; plays fallbacks."""
+    """One wake->question->answer cycle. Never raises; plays fallbacks.
+
+    A queued external inject aborts a pending listening wait at once; the idle
+    main loop then routes it without waiting for the round's fallbacks.
+    """
     engine = engine if engine is not None else build_engine(cfg, asr=asr)
     LOG.info("ENGINE name=%s needs_transcript=%s", engine.name, engine.needs_transcript)
     channel = cfg.get("channel", 0)
@@ -727,8 +747,13 @@ def run_dialogue_round(backend, root: Path, asr: LocalAsr, cfg: dict,
             end_silence_s=cfg.get("end_silence_s", 1.2),
             max_s=cfg.get("max_question_s", 15.0),
             delay_s=cfg.get("listen_delay_s", 0.8),
+            stop_check=INJECT.interrupted,
         )
         if samples is None:
+            if INJECT.interrupted():
+                # 外部注入在排队：立即收尾本轮，交回主循环马上路由。
+                LOG.info("LISTEN_INJECT_PENDING attempt=%d hand over", attempt)
+                return
             if attempt == 1:
                 LOG.info("EMPTY_LISTEN attempt=%d retry with prompt", attempt)
                 play_asset(backend, root, "fallback_listen.wav", cfg)
