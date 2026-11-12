@@ -37,6 +37,9 @@ class Reply:
     timeout_s: float = 90.0              # playback watchdog for this file
     temporary: bool = True               # delete the file after playback
     meta: dict[str, Any] = field(default_factory=dict)   # latency/usage/cost detail
+    # 流式回答：16 kHz mono int16 块的迭代器；有它时边收边播，audio_path
+    # 是播放结束后写出的留档文件（供日志/排障），不是播放源。
+    stream: Any = None
 
 
 @runtime_checkable

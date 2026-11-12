@@ -97,6 +97,13 @@ DEFAULTS = {
     "barge_in_listen_delay_s": 0.2,
     "barge_in_resume_rewind_s": 0.6,
     "barge_in_log_interval_s": 2.0,
+    # 回答期间的人声打断（Silero VAD，依赖 XVF3800 硬件 AEC 压住自己的声音）
+    "barge_in_vad": False,
+    "barge_in_vad_threshold": 0.60,
+    "barge_in_vad_min_s": 0.30,
+    "barge_in_vad_preroll_s": 0.50,
+    "barge_in_vad_warmup_s": 0.40,
+    "tts_stream": False,            # 回答边合成边播放
     "speaking_state_file": "/tmp/ova_speaking.state",
     # 外部文本入口（POST /inject 文本、POST /wake 唤醒），只监听本机；
     # inject_port=0 关闭该入口。见 docs/external-input-inject-2026-09-15.md
@@ -144,6 +151,12 @@ ENV_MAP = {
     "barge_in_listen_delay_s": "WAKE_BARGE_IN_LISTEN_DELAY_S",
     "barge_in_resume_rewind_s": "WAKE_BARGE_IN_RESUME_REWIND_S",
     "barge_in_log_interval_s": "WAKE_BARGE_IN_LOG_INTERVAL_S",
+    "barge_in_vad": "WAKE_BARGE_VAD",
+    "barge_in_vad_threshold": "WAKE_BARGE_VAD_THRESHOLD",
+    "barge_in_vad_min_s": "WAKE_BARGE_VAD_MIN_S",
+    "barge_in_vad_preroll_s": "WAKE_BARGE_VAD_PREROLL_S",
+    "barge_in_vad_warmup_s": "WAKE_BARGE_VAD_WARMUP_S",
+    "tts_stream": "WAKE_TTS_STREAM",
     "speaking_state_file": "WAKE_SPEAKING_STATE_FILE",
     "inject_host": "WAKE_INJECT_HOST",
     "inject_port": "WAKE_INJECT_PORT",
@@ -153,7 +166,8 @@ ENV_MAP = {
 
 
 def _to_type(name: str, value: str):
-    if name in ("dialogue", "barge_in", "ack_before_reply"):
+    if name in ("dialogue", "barge_in", "ack_before_reply", "barge_in_vad",
+                "tts_stream"):
         return value.strip().lower() in ("1", "true", "yes", "on")
     if name == "channel":
         return "mean" if value == "mean" else int(value)
@@ -165,7 +179,9 @@ def _to_type(name: str, value: str):
                  "barge_in_max_command_s", "barge_in_listen_delay_s",
                  "barge_in_resume_rewind_s", "barge_in_log_interval_s",
                  "glm_voice_timeout_s", "glm_voice_target_rms",
-                 "asr_cloud_timeout_s"):
+                 "asr_cloud_timeout_s", "barge_in_vad_threshold",
+                 "barge_in_vad_min_s", "barge_in_vad_preroll_s",
+                 "barge_in_vad_warmup_s"):
         return float(value)
     return value
 
