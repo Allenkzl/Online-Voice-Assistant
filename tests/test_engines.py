@@ -177,7 +177,7 @@ def test_system_prompt_follows_the_reply_language():
     assert system_prompt("en") == EN_SYSTEM_PROMPT
     for alias in ("en", "ENGLISH", "英文"):                # 大小写/别名
         prompt = system_prompt(alias)
-        assert "Always answer in English" in prompt
+        assert prompt.startswith("You are Jarvis")          # 英文人设（展区版按访客语言作答）
         assert "用中文" not in prompt                       # 不再和中文指令并存
         assert "query_weather" in prompt                    # 天气工具要求仍在
     assert "query_weather" in system_prompt(None)           # 中文分支不受影响
@@ -352,3 +352,22 @@ def _main() -> int:
 
 if __name__ == "__main__":
     raise SystemExit(_main())
+
+
+def test_weather_defaults_to_showroom_city(monkeypatch):
+    from ova import tools
+    seen = {}
+
+    class _Resp:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return b"Shenzhen: Cloudy, +26C, humidity 54%, wind 9km/h"
+
+    def fake_urlopen(req, timeout=None):
+        seen["url"] = getattr(req, "full_url", req)
+        return _Resp()
+
+    monkeypatch.setattr(tools.urllib.request, "urlopen", fake_urlopen)
+    out = tools.query_weather("", lang="en")
+    assert "Shenzhen" in seen["url"] and "Shenzhen" in out
+    assert "默认 Shenzhen" in tools.WEATHER_TOOL["function"]["description"]
