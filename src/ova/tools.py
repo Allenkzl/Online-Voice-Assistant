@@ -11,6 +11,7 @@ import json
 import logging
 import time
 import urllib.error
+import os
 import urllib.parse
 import urllib.request
 
@@ -19,18 +20,21 @@ from ova.lang import normalise
 LOG = logging.getLogger("dialogue.weather")
 
 # OpenAI-style function definition advertised to Qwen.
+# Default city when the visitor does not name one (the showroom is in Shenzhen).
+DEFAULT_CITY = (os.environ.get("WEATHER_DEFAULT_CITY") or "Shenzhen").strip()
+
 WEATHER_TOOL = {
     "type": "function",
     "function": {
         "name": "query_weather",
         "description": "查询指定城市当前的实时天气。城市用英文名，"
-                       "如 Hangzhou / Shanghai / Beijing；若用户没说明城市，默认 Hangzhou",
+                       f"如 Shenzhen / Shanghai / Beijing；若用户没说明城市，默认 {DEFAULT_CITY}",
         "parameters": {
             "type": "object",
             "properties": {
                 "city_slug": {
                     "type": "string",
-                    "description": "城市英文名，如 Hangzhou",
+                    "description": "城市英文名，如 Shenzhen",
                 }
             },
             "required": ["city_slug"],
@@ -52,7 +56,7 @@ def query_weather(city_slug: str, timeout: float = 12.0,
 
     Tries twice (transient network hiccups are common from the robot).
     """
-    slug = (city_slug or "Hangzhou").strip()
+    slug = (city_slug or "").strip() or DEFAULT_CITY
     english = normalise(lang) == "en"
     query = urllib.parse.urlencode({
         "format": "%l: %C, %t, humidity %h, wind %w" if english else

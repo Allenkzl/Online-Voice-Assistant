@@ -97,7 +97,7 @@ def ask_with_weather(text: str, lang: str | None = None) -> str:
     for name, args, call_id in calls:
         if name == "query_weather":
             try:
-                result = query_weather(args.get("city_slug", "Hangzhou"), lang=lang)
+                result = query_weather(args.get("city_slug", ""), lang=lang)
             except Exception as exc:  # noqa: BLE001 - report failure to the model
                 result = (f"Weather lookup failed: {exc}" if normalise_lang(lang) == "en"
                           else f"天气查询失败: {exc}")

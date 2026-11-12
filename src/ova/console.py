@@ -358,7 +358,7 @@ def llm_test(text: str):
             if name == "query_weather":
                 t1 = time.monotonic()
                 try:
-                    result = query_weather(args.get("city_slug", "Hangzhou"))
+                    result = query_weather(args.get("city_slug", ""))
                     ms_w = (time.monotonic() - t1) * 1000
                 except Exception as exc:
                     result = f"天气查询失败: {exc}"
