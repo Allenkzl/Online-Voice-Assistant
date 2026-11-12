@@ -19,7 +19,7 @@ from ova.engines.base import EngineError, Reply
 from ova.lang import normalise as normalise_lang
 from ova.llm import CloudError, chat_once, system_prompt
 from ova.tools import WEATHER_TOOL, load_tool_calls, query_weather
-from ova.tts import synthesize
+from ova.tts import stream_pcm16, synthesize
 
 LOG = logging.getLogger("dialogue.pipeline")
 
@@ -115,6 +115,23 @@ def ask_with_weather(text: str, lang: str | None = None) -> str:
     return ensure_reply_language(reply, lang, messages)
 
 
+def _primed(gen):
+    """Pull the first audio chunk now, so connect/HTTP errors surface inside
+    respond() (and hit the normal fallback) instead of mid-playback."""
+    first = next(gen, None)
+    if first is None:
+        gen.close()
+        raise CloudError("tts stream returned no audio")
+
+    def chain():
+        try:
+            yield first
+            yield from gen
+        finally:
+            gen.close()
+    return chain()
+
+
 class PipelineEngine:
     """Local ASR + Qwen chat + Qwen TTS (needs the ASR transcript)."""
 
@@ -137,14 +154,21 @@ class PipelineEngine:
         LOG.info("QWEN_REPLY lang=%s text=%s", reply_lang or "-", reply_text[:80])
         svc_event("llm", f"千问回答: {reply_text[:80]}", "ok", text=reply_text[:120])
 
-        try:
-            wav = synthesize(reply_text)
-        except CloudError as exc:
-            raise EngineError(f"tts failed: {exc}") from exc
-
         tmp = Path(f"/tmp/hjw_reply_{os.getpid()}_{int(time.time() * 1000)}.wav")
-        tmp.write_bytes(wav)
-        LOG.info("REPLY_START")
+        stream = None
+        if cfg.get("tts_stream", False):
+            try:
+                stream = _primed(stream_pcm16(reply_text))
+            except CloudError as exc:
+                LOG.warning("TTS_STREAM_FAILED %s; falling back to batch", exc)
+        if stream is None:
+            try:
+                wav = synthesize(reply_text)
+            except CloudError as exc:
+                raise EngineError(f"tts failed: {exc}") from exc
+            tmp.write_bytes(wav)
+        LOG.info("REPLY_START stream=%s tts_first_s=%.2f", stream is not None,
+                 time.monotonic() - t0)
         svc_event("tts", "播放回答…", "info")
         return Reply(
             audio_path=tmp,
@@ -152,6 +176,7 @@ class PipelineEngine:
             transcript=text,
             timeout_s=90.0,
             temporary=True,
+            stream=stream,
             meta={
                 "engine": self.name,
                 "provider": "qwen",

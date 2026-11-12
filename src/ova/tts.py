@@ -1,8 +1,11 @@
-import urllib.error
-import urllib.request
 """Qwen speech synthesis client (qwen3-tts-flash, native DashScope API)."""
 
+import base64
+import http.client
 import io
+import json
+import urllib.error
+import urllib.request
 import re
 from concurrent.futures import ThreadPoolExecutor
 import os
@@ -20,6 +23,8 @@ TTS_VOICE = os.getenv("TTS_VOICE", "Cherry")
 TTS_TIMEOUT_S = float(os.getenv("TTS_TIMEOUT_S", "60"))
 # 多句回答按句并行合成再拼接，总耗时≈最长一句而不是各句之和；0/1 = 关闭。
 TTS_PARALLEL = int(os.getenv("TTS_PARALLEL", "4"))
+# 流式合成没法做整段峰值归一，用固定增益 + 限幅（典型 qwen3-tts 峰值约 -6 dBFS）。
+TTS_STREAM_GAIN = float(os.getenv("TTS_STREAM_GAIN", "1.4"))
 SENTENCE_RE = re.compile(r"(?<=[。！？!?；;])\s*|(?<=\.)\s+")
 
 
@@ -97,3 +102,115 @@ def _synthesize_mono16(text: str, timeout: float) -> np.ndarray:
         if wav.getnchannels() > 1:
             samples = samples.reshape(-1, wav.getnchannels()).mean(axis=1).astype(np.int16)
     return linear_resample(samples, src_rate, 16000)
+
+
+class StreamResampler:
+    """Stateful linear resampler: feed chunks, get continuous output.
+
+    Keeps the fractional read position and the last source sample between
+    chunks, so chunk boundaries do not click.
+    """
+
+    def __init__(self, src_rate: int, dst_rate: int = 16000):
+        self.step = src_rate / dst_rate
+        self.pos = 0.0
+        self.tail = np.zeros(0, dtype=np.float32)
+
+    def feed(self, chunk: np.ndarray) -> np.ndarray:
+        buf = np.concatenate([self.tail, chunk.astype(np.float32)])
+        if len(buf) < 2:
+            self.tail = buf
+            return np.zeros(0, dtype=np.float32)
+        n = int(np.floor((len(buf) - 1 - self.pos) / self.step)) + 1
+        idx = self.pos + self.step * np.arange(max(n, 0))
+        out = np.interp(idx, np.arange(len(buf)), buf)
+        nxt = self.pos + self.step * max(n, 0)
+        drop = int(np.floor(nxt))
+        self.tail = buf[drop:]
+        self.pos = nxt - drop
+        return out
+
+
+def _pcm_from_event(raw: bytes, state: dict) -> np.ndarray:
+    """Decode one SSE audio chunk; the first one carries a RIFF/WAV header."""
+    buf = state.get("carry", b"") + raw
+    if not state.get("header_done"):
+        if buf[:4] == b"RIFF":
+            idx = buf.find(b"data", 12)
+            if idx < 0:
+                state["carry"] = buf
+                return np.zeros(0, dtype=np.int16)
+            state["rate"] = int.from_bytes(buf[24:28], "little") or 24000
+            state["channels"] = int.from_bytes(buf[22:24], "little") or 1
+            buf = buf[idx + 8:]
+        state["header_done"] = True
+    width = 2 * state.get("channels", 1)
+    keep = len(buf) - len(buf) % width
+    state["carry"] = buf[keep:]
+    samples = np.frombuffer(buf[:keep], dtype="<i2")
+    if state.get("channels", 1) > 1:
+        samples = samples.reshape(-1, state["channels"]).mean(axis=1)
+    return samples
+
+
+def stream_pcm16(text: str, timeout: float | None = None,
+                 gain: float | None = None):
+    """Streaming TTS: yield 16 kHz mono int16 chunks as soon as they arrive.
+
+    DashScope SSE (``X-DashScope-SSE: enable``) sends base64 audio pieces;
+    the first piece is a WAV header + PCM, the rest raw PCM. Closing the
+    generator closes the HTTP connection (barge-in / inject stop it early;
+    billing is by input characters, so this saves time, not money).
+    """
+    timeout = TTS_TIMEOUT_S if timeout is None else timeout
+    gain = TTS_STREAM_GAIN if gain is None else gain
+    key = os.environ.get("DASHSCOPE_API_KEY", "")
+    if not key:
+        raise CloudError("DASHSCOPE_API_KEY is not set")
+    payload = {"model": TTS_MODEL, "input": {"text": text, "voice": TTS_VOICE}}
+    req = urllib.request.Request(
+        TTS_URL, data=json.dumps(payload).encode("utf-8"),
+        headers={"Authorization": "Bearer " + key,
+                 "Content-Type": "application/json",
+                 "X-DashScope-SSE": "enable"},
+    )
+    try:
+        resp = urllib.request.urlopen(req, timeout=timeout)
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", "replace")[:300]
+        raise CloudError(f"HTTP {exc.code}: {body}") from exc
+    except (urllib.error.URLError, OSError) as exc:
+        raise CloudError(f"tts stream failed: {exc}") from exc
+    state: dict = {}
+    resampler = None
+    try:
+        for line in resp:
+            if not line.startswith(b"data:"):
+                continue
+            body = line[5:].strip()
+            if not body:
+                continue
+            try:
+                event = json.loads(body)
+            except ValueError:
+                continue
+            if event.get("code") and not event.get("output"):
+                raise CloudError(f"tts stream error: {str(event)[:200]}")
+            output = event.get("output") or {}
+            audio = (output.get("audio") or {}).get("data")
+            if not audio:
+                if output.get("finish_reason") == "stop" or (output.get("audio") or {}).get("url"):
+                    return          # 末包：服务端随后会直接断流
+                continue
+            pcm = _pcm_from_event(base64.b64decode(audio), state)
+            if resampler is None and state.get("header_done"):
+                resampler = StreamResampler(state.get("rate", 24000))
+            if resampler is None or not len(pcm):
+                continue
+            out = resampler.feed(pcm) * gain
+            if len(out):
+                yield out.round().clip(-32768, 32767).astype(np.int16)
+    except (TimeoutError, OSError, http.client.HTTPException) as exc:
+        raise CloudError(f"tts stream read failed: {exc}") from exc
+    finally:
+        resp.close()
