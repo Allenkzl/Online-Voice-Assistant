@@ -34,3 +34,5 @@ def http_json(url: str, payload: dict, timeout: float = 25.0,
         raise CloudError(f"HTTP {exc.code}: {body}") from exc
     except urllib.error.URLError as exc:
         raise CloudError(f"network error: {exc.reason}") from exc
+    except (TimeoutError, OSError) as exc:  # read timeout / reset mid-response
+        raise CloudError(f"network error: {exc!r}") from exc

@@ -72,6 +72,9 @@ DEFAULTS = {
     #                 "e2e"      = 音频直发端到端语音模型（GLM-4-Voice）
     "engine": "pipeline",
     "asr_model_dir": "models/asr_sense_voice_zh_en_int8",
+    # 对话 ASR：local=本机 sherpa-onnx；cloud=千问 qwen3-asr-flash（失败回退本机）
+    "asr_backend": "local",
+    "asr_cloud_timeout_s": 6.0,
     "ack_before_reply": False,      # 展厅模式：唤醒音后安静等待正式回答
     "vad_backend": "energy",        # energy=轻量能量阈值; silero=sherpa-onnx Silero VAD
     "vad_model_path": "models/silero_vad.onnx",
@@ -118,6 +121,8 @@ ENV_MAP = {
     "dialogue": "WAKE_DIALOGUE",
     "engine": "WAKE_ENGINE",
     "asr_model_dir": "WAKE_ASR_MODEL_DIR",
+    "asr_backend": "WAKE_ASR_BACKEND",
+    "asr_cloud_timeout_s": "WAKE_ASR_CLOUD_TIMEOUT_S",
     "ack_before_reply": "WAKE_ACK_BEFORE_REPLY",
     "vad_backend": "WAKE_VAD_BACKEND",
     "vad_model_path": "WAKE_VAD_MODEL_PATH",
@@ -159,7 +164,8 @@ def _to_type(name: str, value: str):
                  "vad_buffer_s", "barge_in_threshold",
                  "barge_in_max_command_s", "barge_in_listen_delay_s",
                  "barge_in_resume_rewind_s", "barge_in_log_interval_s",
-                 "glm_voice_timeout_s", "glm_voice_target_rms"):
+                 "glm_voice_timeout_s", "glm_voice_target_rms",
+                 "asr_cloud_timeout_s"):
         return float(value)
     return value
 
@@ -587,14 +593,26 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def build_dialogue_asr(cfg: dict):
+    """Dialogue transcript ASR selected by ``asr_backend`` (local | cloud)."""
+    backend = str(cfg.get("asr_backend", "local")).strip().lower()
+    if backend == "cloud":
+        from ova.asr_cloud import CloudAsr
+        return CloudAsr(Path(cfg["asr_model_dir"]),
+                        timeout=float(cfg.get("asr_cloud_timeout_s", 6.0)))
+    if backend != "local":
+        LOG.warning("unknown asr_backend=%r, using local", backend)
+    from ova.asr import LocalAsr
+    return LocalAsr(Path(cfg["asr_model_dir"]))
+
+
 def ensure_dialogue_engine(cfg: dict, asr=None, engine=None):
     """Build the dialogue engine (and the transcript ASR) on first use."""
     from ova.engines import build_engine
     if engine is None:
         engine = build_engine(cfg, asr=asr)
     if engine.needs_transcript and asr is None:
-        from ova.asr import LocalAsr
-        asr = LocalAsr(Path(cfg["asr_model_dir"]))
+        asr = build_dialogue_asr(cfg)
         engine = build_engine(cfg, asr=asr)
     return asr, engine
 
