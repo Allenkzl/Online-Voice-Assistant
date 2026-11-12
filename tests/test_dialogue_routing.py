@@ -101,7 +101,7 @@ class FakeEngine:
 def test_stop_and_continue_word_lists():
     assert _is_stop_command("停止吧") and _is_stop_command("Stop")
     assert _is_continue_command("继续") and _is_continue_command("go on")
-    assert not _is_stop_command("智慧零售")
+    assert not _is_stop_command("智慧空间")
     assert not _is_continue_command("介绍应急救灾")
 
 
@@ -115,10 +115,10 @@ def test_pipeline_stop_command_goes_idle_without_engine_call():
 
 def test_pipeline_routes_showroom_intro_to_local_wav():
     backend, engine = FakeBackend(), FakeEngine(needs_transcript=True)
-    state = _playback_from_text(backend, ASSETS, asr=None, cfg={}, text="介绍智慧零售",
+    state = _playback_from_text(backend, ASSETS, asr=None, cfg={}, text="介绍智慧空间",
                                 samples=np.zeros(1600, dtype=np.int16), engine=engine)
     assert state is not None
-    assert state.name == "智慧零售讲解"
+    assert state.name == "智慧空间讲解"
     assert state.path.is_file()
     assert state.path.name == "smart_retail_zh.wav"
     assert engine.calls == []          # intros never reach the engine (no cloud cost)
@@ -135,7 +135,7 @@ def test_pipeline_english_intro_routes_to_english_wav():
 
 def test_continue_command_resumes_previous_playback():
     backend, engine = FakeBackend(), FakeEngine(needs_transcript=True)
-    previous = _playback_from_text(backend, ASSETS, asr=None, cfg={}, text="介绍智慧零售",
+    previous = _playback_from_text(backend, ASSETS, asr=None, cfg={}, text="介绍智慧空间",
                                    samples=np.zeros(1600, dtype=np.int16), engine=engine)
     resumed = _playback_from_text(backend, ASSETS, asr=None, cfg={}, text="继续",
                                   samples=np.zeros(1600, dtype=np.int16),
@@ -257,7 +257,7 @@ def test_run_dialogue_round_transcribes_only_when_needed():
 
         def transcribe(self, samples):
             self.calls += 1
-            return "介绍智慧零售"
+            return "介绍智慧空间"
 
     backend = FakeBackend()
     original_listen, original_loop = dlg.listen_question, dlg._run_playback_loop
